@@ -116,8 +116,15 @@ async function main() {
 
             // Aguardando a tela do ticket abrir
             await new Promise((r) => setTimeout(r, 4000));
+            // Recarrega a página para tentar evitar falhas
             await pagina.reload({ waitUntil: "networkidle2" });
             await new Promise((r) => setTimeout(r, 8000));
+
+            const erro = await pagina.waitForSelector("#div-form-builder > div > span.error", { visible: true, timeout: 2000 }).catch(() => null);
+            if (erro) {
+                await pagina.reload({ waitUntil: "domcontentloaded" });
+                await new Promise((r) => setTimeout(r, 4000));
+            }
 
             // Captura a mantenedora do ticket
             const mantenedora = await pagina.evaluate(() => {
@@ -621,8 +628,8 @@ async function main() {
         });
     }
 
-    // Salva Excel
-    const pastaDestino = path.join(process.env.USERPROFILE, "Downloads", "Faculdade - Estagio", "Programação", "cits", "dados");
+    // Acessa a pasta onde os arquivos serão salvos
+    const pastaDestino = path.join(__dirname, "dados");
 
     // Garante que a pasta exista
     if (!fs.existsSync(pastaDestino)) {
@@ -693,6 +700,7 @@ async function main() {
             { width: 10 }
         ];
 
+        // Salva Excel
         await workbook.xlsx.writeFile(arquivoExcel);
 
         const horario = new Date().toLocaleTimeString('pt-BR');
