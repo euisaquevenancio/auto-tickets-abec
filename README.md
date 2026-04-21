@@ -24,6 +24,28 @@ Após a instalação, execute o comando abaixo no terminal para iniciar a automa
     npm run autoTicketsABEC.js
 ```
 
+## Agendando tarefa
+
+Para fazer com que este programa execute automaticamente a cada 1 hora é necessário executar os seguintes comandos via prompt de comando:
+
+```bash
+    schtasks /create /sc hourly /mo 1 /tn "AutoTicketsABEC" /tr "C:\Users\Usuario\Caminho\AteA\Pasta\auto-tickets-abec-main\.bat" /st 00:00 /ru SYSTEM 
+```
+
+Para a criação da tarefa.
+
+```bash
+    schtasks /run /tn "AutoTicketsABEC"
+```
+
+Para executar a tarefa.
+
+```bash
+    schtasks /delete /tn "AutoTicketsABEC" /f
+```
+
+Para excluir a tarefa, caso seja necessário.
+
 ## Autores
 
 - *[@euisaquevenancio](https://euisaquevenancio.github.io/portfolio/) - 19/04/2026*

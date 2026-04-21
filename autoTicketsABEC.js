@@ -77,7 +77,7 @@ async function main() {
             const ticket = todosTickets[i];
             const entrada = datasEntradas[i];
             // Caso o ticket não exista ou ele esteja na lista de tickets que devem ser ignorados, pula esse ticket e segue o fluxo
-            if (!ticket || listaTicketsIgnorados.includes(ticket) || (ticket == "485540" || ticket == 485540)) {
+            if (!ticket || listaTicketsIgnorados.includes(ticket) || (ticket == "485540" || ticket == "588094" || ticket == "587743" || ticket == "581721")) {
                 continue;
             }
 
@@ -636,32 +636,80 @@ async function main() {
         fs.mkdirSync(pastaDestino, { recursive: true });
     }
 
+    // Captura o arquivo excel
     const arquivoExcel = path.join(pastaDestino, "tickets.xlsx");
-
-    // 🔎 Verifica se o arquivo já existe e remove
+    
+    const workbook = new ExcelJS.Workbook();
+    // Se o arquivo existe, lê
     if (fs.existsSync(arquivoExcel)) {
-        fs.unlinkSync(arquivoExcel);
-        console.log("🗑️ Arquivo antigo removido.");
+        await workbook.xlsx.readFile(arquivoExcel);
     }
 
-    if (contadorTicket > 1 && listaTicketsExcel.length > 0) {
-        const workbook = new ExcelJS.Workbook();
-        const sheet = workbook.addWorksheet("Tickets");
+    let sheet = workbook.getWorksheet("Tickets");
+    // Se a planilha não estiver estruturada, adiciona o cabeçalho 
+    if (!sheet) {
+        sheet = workbook.addWorksheet("Tickets");
 
-        // Converte os objetos em linhas
-        const linhas = listaTicketsExcel.map(t => [
-            t.TICKET,
-            t.ENTRADA,
-            t.VENCIMENTO,
-            t["FORMA PAGAMENTO"],
-            t.VALOR,
-            t.TIPO,
-            t.OBSERVAÇÃO,
-            t["Nº PEDIDO"],
-            t.UNIDADE,
-            t.SOLICITANTE,
-            t.FILA
+        sheet.addRow([
+            "TICKET",
+            "ENTRADA",
+            "VENCIMENTO",
+            "FORMA PAGAMENTO",
+            "VALOR",
+            "TIPO",
+            "OBSERVAÇÃO",
+            "Nº PEDIDO",
+            "UNIDADE",
+            "SOLICITANTE",
+            "FILA"
+        ]);
+    }
+
+    // Aplica a largura nas colunas
+    sheet.columns = [
+        { key: "TICKET", width: 8 },
+        { key: "ENTRADA", width: 8 },
+        { key: "VENCIMENTO", width: 8 },
+        { key: "FORMA_PAGAMENTO", width: 8 },
+        { key: "VALOR", width: 8 },
+        { key: "TIPO", width: 8 },
+        { key: "OBSERVACAO", width: 8 },
+        { key: "PEDIDO", width: 8 },
+        { key: "UNIDADE", width: 8 },
+        { key: "SOLICITANTE", width: 8 },
+        { key: "FILA", width: 8 }
+    ];
+
+    // Adicionando os dados (tickets)
+    if (contadorTicket > 1 && listaTicketsExcel.length > 0) {
+        listaTicketsExcel.forEach(t => {
+            sheet.addRow([
+                t.TICKET,
+                t.ENTRADA,
+                t.VENCIMENTO,
+                t["FORMA PAGAMENTO"],
+                t.VALOR,
+                t.TIPO,
+                t.OBSERVAÇÃO,
+                t["Nº PEDIDO"],
+                t.UNIDADE,
+                t.SOLICITANTE,
+                t.FILA
             ]);
+        });
+    }
+
+    if (sheet.rowCount > 1) {
+
+        // Remove a tabela antiga
+        if (sheet.model.tables) {
+            sheet.model.tables = [];
+        }
+
+        const linhasValidas = sheet.getSheetValues()
+            .slice(2) // remove header
+            .filter(row => Array.isArray(row)) // Remove undefined
+            .map(row => row.slice(1)); // Remove índice fantasma
 
         sheet.addTable({
             name: "TabelaTickets",
@@ -683,30 +731,19 @@ async function main() {
                 { name: "SOLICITANTE" },
                 { name: "FILA" }
             ],
-            rows: linhas
+            rows: linhasValidas
         });
+    }
 
-        // largura das colunas
-        sheet.columns = [
-            { width: 10 },
-            { width: 10 },
-            { width: 10 },
-            { width: 10 },
-            { width: 10 },
-            { width: 10 },
-            { width: 10 },
-            { width: 10 },
-            { width: 10 },
-            { width: 10 }
-        ];
+    // Salva o arquivo excel
+    await workbook.xlsx.writeFile(arquivoExcel);
 
-        // Salva Excel
-        await workbook.xlsx.writeFile(arquivoExcel);
+    // Exibe mensagem com o horário
+    const horario = new Date().toLocaleTimeString('pt-BR');
+    console.log(`\n✅ Todos os dados salvos em ${arquivoExcel} às ${horario} - Arquivo não existia`);
+    exec(`start "" "${arquivoExcel}"`);
 
-        const horario = new Date().toLocaleTimeString('pt-BR');
-        console.log(`\n✅ Todos os dados salvos em ${arquivoExcel} às ${horario}`);
-        exec(`start "" "${arquivoExcel}"`);
-
+    if (contadorTicket > 1 && listaTicketsExcel.length > 0) {
         // Regularizações TXT
         const arquivoTxtRegularizacoes = path.join(pastaDestino, "regularizacoes.txt");
 
