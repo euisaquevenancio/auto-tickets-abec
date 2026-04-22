@@ -459,7 +459,7 @@ async function main() {
 
                     if (contaFinanceira == "2095 - SERVIÇOS COM TRANSMISSÃO DE DADOS") {
                         if (centroDeCustos == "35147" || centroDeCustos == "35153") return 351029;
-                        if (centroDeCustos == "62001") return 207641;
+                        if (centroDeCustos == "62001" || centroDeCustos == "41000") return 207641;
                         if (centroDeCustos == "62105" || centroDeCustos == "35142") return 192081;
                     }
 
@@ -505,6 +505,7 @@ async function main() {
                     if (contaFinanceira == "2167 - LICENÇA E SERVIÇOS DE MANUTENÇÃO") {
                         if (centroDeCustos == "35147" || centroDeCustos == "34352" || centroDeCustos == "35123" || centroDeCustos == "35120") return 33604;
                         if (centroDeCustos == "35143") return 358936;
+                        if (centroDeCustos == "35122") return 358384;
                         if (centroDeCustos == "35119") return 685721;
                         if (centroDeCustos == "35121") return 746630;
                         if (centroDeCustos == "10382") return 675339;
@@ -700,7 +701,6 @@ async function main() {
     }
 
     if (sheet.rowCount > 1) {
-
         // Remove a tabela antiga
         if (sheet.model.tables) {
             sheet.model.tables = [];
@@ -740,8 +740,6 @@ async function main() {
 
     // Exibe mensagem com o horário
     const horario = new Date().toLocaleTimeString('pt-BR');
-    console.log(`\n✅ Todos os dados salvos em ${arquivoExcel} às ${horario} - Arquivo não existia`);
-    exec(`start "" "${arquivoExcel}"`);
 
     if (contadorTicket > 1 && listaTicketsExcel.length > 0) {
         // Regularizações TXT
@@ -794,6 +792,9 @@ async function main() {
         if (novoConteudoTicketsIgnorados) {
             fs.appendFileSync(arquivoTxtTicketsIgnorados, novoConteudoTicketsIgnorados, "utf-8");
         }
+
+        console.log(`\n✅ Todos os dados salvos em ${arquivoExcel} às ${horario}`);
+        exec(`start "" "${arquivoExcel}"`);
     } else {
         const horario = new Date().toLocaleTimeString('pt-BR');
         console.log(`\n🎉 Não há nenhum ticket novo. ${horario}`);
