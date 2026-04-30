@@ -48,6 +48,7 @@ async function main() {
     await pagina.type("#password", senhaCitsmart);
     await pagina.keyboard.press("Enter");
     await pagina.waitForNavigation({ waitUntil: "networkidle2" });
+    await new Promise((r) => setTimeout(r, 2000));
 
     const listaTicketsExcel = [];
     const listaTicketsNaoABEC = [];
@@ -438,7 +439,7 @@ async function main() {
                     }
 
                     if (contaFinanceira == "2088 - FRETES E CARRETOS") {
-                        return 94262;
+                        return 200796;
                     }
 
                     if (contaFinanceira == "2091 - MATERIAIS DE ESCRITÓRIO") {
@@ -477,7 +478,7 @@ async function main() {
                     }
 
                     if (contaFinanceira == "2134 - SERVIÇOS DE COBRANÇA") {
-                        if (centroDeCustos == "43130") return 358936;
+                        if (centroDeCustos == "43130") return 665743;
                         if (centroDeCustos == "35122") return 353199;
                     }
 
@@ -503,7 +504,7 @@ async function main() {
                     }
 
                     if (contaFinanceira == "2167 - LICENÇA E SERVIÇOS DE MANUTENÇÃO") {
-                        if (centroDeCustos == "35147" || centroDeCustos == "34352" || centroDeCustos == "35123" || centroDeCustos == "35120") return 33604;
+                        if (centroDeCustos == "35147" || centroDeCustos == "34352" || centroDeCustos == "35123" || centroDeCustos == "35120" || centroDeCustos == "35160") return 33604;
                         if (centroDeCustos == "35143") return 358936;
                         if (centroDeCustos == "35122") return 358384;
                         if (centroDeCustos == "35119") return 685721;
