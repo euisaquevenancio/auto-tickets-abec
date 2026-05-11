@@ -235,7 +235,7 @@ async function main() {
                     return "REGULARIZAÇÃO";
                 } else {
                     // REGULARIZAÇÃO
-                    if (!numeroDoPedido || numeroDoPedido == "-" || numeroDoPedido.toUpperCase() == "X" || numeroDoPedido == "o" || numeroDoPedido == "0" || numeroDoPedido.toUpperCase() == "REGULARIZAÇÃO" || numeroDoPedido.toUpperCase() == "REGULARIZACAO" || numeroDoPedido.toUpperCase() == "CRIAR" || numeroDoPedido.toUpperCase() == "NÃO TEM" || numeroDoPedido == "000000") {
+                    if (!numeroDoPedido || numeroDoPedido == "-" || numeroDoPedido.toUpperCase() == "X" || numeroDoPedido == "o" || numeroDoPedido == "0" || numeroDoPedido.toUpperCase() == "REGULARIZAÇÃO" || numeroDoPedido.toUpperCase() == "REGULARIZACAO" || numeroDoPedido.toUpperCase() == "CRIAR" || numeroDoPedido.toUpperCase() == "NÃO TEM" || numeroDoPedido == "000000" || numeroDoPedido == "1" || numeroDoPedido == "11" || numeroDoPedido == "140" || numeroDoPedido == "134558797" || numeroDoPedido == "134653571" || numeroDoPedido == "134565257") {
                         return "REGULARIZAÇÃO";
                     }
                     // OC
@@ -316,6 +316,18 @@ async function main() {
                 observacao = "CRIAR REGULARIZAÇÃO COM O CR 35113 E NO LANÇAMENTO PASSAR PARA 35344";
             }
 
+            // Captura a descrição  do ticket
+            let descricaoTicket = await pagina.evaluate(() => {
+                const elementoDescricao = document.querySelector("#service-request-view > div > div > div > div.service-request-wrapper > div > div > div.service-request-content.clearfix.s12 > div:nth-child(2) > div.panel.panel-default.service-request-panel-details > div > fieldset > div:nth-child(2) > div > div > div");
+                if (elementoDescricao) {
+                    return elementoDescricao.textContent
+                            .replace(/\s*\n+\s*/g, ' ')
+                            .replace(/\s+/g, ' ')
+                            .trim();
+                }
+                return null;
+            });
+
             // Captura a unidade do ticket
             unidade = await pagina.evaluate((termo) => {
                 if (termo === "Terceiros") {
@@ -373,7 +385,7 @@ async function main() {
                     }
 
                     const elementoContaFinanceira = document.querySelector("#testelancarnotasmb\\.contamb input");
-                    let conta = elementoContaFinanceira.value?.trim().toUpperCase() || "";
+                    let conta = elementoContaFinanceira.value?.trim().toUpperCase();
 
                     if (conta === "FORMAÇÃO E DESENVOLVIMENTO") {
                         return "2041 - CURSOS E TREINAMENTOS";
@@ -396,6 +408,10 @@ async function main() {
                             descricao.includes(conta)
                         );
                     });
+
+                    if (conta == undefined || conta == "undefined" || conta == "" || conta == false) {
+                        return elementoContaFinanceira.value?.trim().toUpperCase();
+                    }
 
                     return conta;
                 }, termo, listaContasFinanceiras);
@@ -506,7 +522,7 @@ async function main() {
                     if (contaFinanceira == "2167 - LICENÇA E SERVIÇOS DE MANUTENÇÃO") {
                         if (centroDeCustos == "35147" || centroDeCustos == "34352" || centroDeCustos == "35123" || centroDeCustos == "35120" || centroDeCustos == "35160") return 33604;
                         if (centroDeCustos == "35143") return 358936;
-                        if (centroDeCustos == "35122") return 358384;
+                        if (centroDeCustos == "35122" || centroDeCustos == "10273") return 358384;
                         if (centroDeCustos == "35119") return 685721;
                         if (centroDeCustos == "35121") return 746630;
                         if (centroDeCustos == "10382") return 675339;
@@ -516,7 +532,7 @@ async function main() {
                     }
                     
                     if (contaFinanceira == "2170 - SERVIÇOS COM IMPRESSÃO") {
-                        return 358951;
+                        return 746323;
                     }
 
                     if (contaFinanceira == "2172 - SERVIÇOS DE TI") {
@@ -579,6 +595,7 @@ async function main() {
                     valor: valorNota,
                     vencimento: vencimento,
                     item: item,
+                    descricaoTicket: descricaoTicket,
                     centroDeCustos: centroDeCustos,
                     contaFinanceira: contaFinanceira,
                     cnpj: cnpj,
@@ -600,6 +617,7 @@ async function main() {
                 "TIPO": tipo,
                 "OBSERVAÇÃO": observacao,
                 "Nº PEDIDO": numeroDoPedido,
+                "DESCRIÇÃO": descricaoTicket,
                 UNIDADE: unidade,
                 "SOLICITANTE": emailSolicitante,
                 FILA: fila,
@@ -661,6 +679,7 @@ async function main() {
             "TIPO",
             "OBSERVAÇÃO",
             "Nº PEDIDO",
+            "DESCRIÇÃO",
             "UNIDADE",
             "SOLICITANTE",
             "FILA"
@@ -677,6 +696,7 @@ async function main() {
         { key: "TIPO", width: 8 },
         { key: "OBSERVACAO", width: 8 },
         { key: "PEDIDO", width: 8 },
+        { key: "DESCRICAO", width: 8 },
         { key: "UNIDADE", width: 8 },
         { key: "SOLICITANTE", width: 8 },
         { key: "FILA", width: 8 }
@@ -694,6 +714,7 @@ async function main() {
                 t.TIPO,
                 t.OBSERVAÇÃO,
                 t["Nº PEDIDO"],
+                t.DESCRIÇÃO,
                 t.UNIDADE,
                 t.SOLICITANTE,
                 t.FILA
@@ -728,6 +749,7 @@ async function main() {
                 { name: "TIPO" },
                 { name: "OBSERVAÇÃO" },
                 { name: "Nº PEDIDO" },
+                { name: "DESCRIÇÃO" },
                 { name: "UNIDADE" },
                 { name: "SOLICITANTE" },
                 { name: "FILA" }
@@ -762,6 +784,7 @@ async function main() {
                 novoConteudoRegularizacoes += `TICKET ${regularizacaoAtual.ticket}\n`;
                 novoConteudoRegularizacoes += `NOTA FISCAL NÚMERO ${regularizacaoAtual.numero} | ${regularizacaoAtual.valor} | ${regularizacaoAtual.vencimento}\n`;
                 novoConteudoRegularizacoes += `ITEM ${regularizacaoAtual.item}\n`;
+                novoConteudoRegularizacoes += `DESCRIÇÃO ${regularizacaoAtual.descricaoTicket}\n`;
                 novoConteudoRegularizacoes += `CR ${regularizacaoAtual.centroDeCustos}\n`;
                 novoConteudoRegularizacoes += `CONTA ${regularizacaoAtual.contaFinanceira}\n`;
                 novoConteudoRegularizacoes += `CNPJ ${regularizacaoAtual.cnpj || ""}\n`;
@@ -774,7 +797,6 @@ async function main() {
             fs.appendFileSync(arquivoTxtRegularizacoes, novoConteudoRegularizacoes, "utf-8");
         }
 
-        ////
         // ticketsIgnorados TXT
         const arquivoTxtTicketsIgnorados = path.join(pastaDestino, "ticketsIgnorados.txt");
 
