@@ -494,7 +494,7 @@ async function main() {
                     }
 
                     if (contaFinanceira == "2134 - SERVIÇOS DE COBRANÇA") {
-                        if (centroDeCustos == "43130") return 665743;
+                        if (centroDeCustos == "43130") return 358936;
                         if (centroDeCustos == "35122") return 353199;
                     }
 
