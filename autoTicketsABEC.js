@@ -1,4 +1,5 @@
 /*
+    @euisaquevenancio - 23/06/2026
     Automação para captura de tickets no Citsmart da mantenedora ABEC, desenvolvido com Node.js.
     
     Instalando todas bibliotecas de uma vez via terminal:
@@ -27,8 +28,13 @@ const usuarioCitsmart = process.env.USUARIO;
 const senhaCitsmart = process.env.SENHA;
 
 async function main() {
+    const horarioInicio = new Date().toLocaleTimeString('pt-BR'); 
     // Executando o navegador
-    const navegador = await puppeteer.launch({ headless: false });
+    // const navegador = await puppeteer.launch({ headless: false });
+    const navegador = await puppeteer.launch({
+        executablePath: 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+        headless: !true
+    });
     const pagina = await navegador.newPage();
     pagina.setDefaultTimeout(30000);
 
@@ -78,7 +84,15 @@ async function main() {
             const ticket = todosTickets[i];
             const entrada = datasEntradas[i];
             // Caso o ticket não exista ou ele esteja na lista de tickets que devem ser ignorados, pula esse ticket e segue o fluxo
-            if (!ticket || listaTicketsIgnorados.includes(ticket) || (ticket == "485540" || ticket == "588094" || ticket == "587743" || ticket == "581721")) {
+            if (!ticket || listaTicketsIgnorados.includes(ticket) || ticket == "485540") {
+                if (ticket == "485540") {
+                    if (contadorTicket < 10) {
+                        console.log(`❌ #0${contadorTicket} | ${ticket} | Entrada: ${entrada} | Ignorado`);
+                    } else {
+                        console.log(`❌ #${contadorTicket} | ${ticket} | Entrada: ${entrada} | Ignorado`);
+                    }
+                    contadorTicket++;
+                }
                 continue;
             }
 
@@ -112,7 +126,7 @@ async function main() {
                 await pagina.waitForSelector(".request-id", { visible: true, timeout: 20000 });
                 await pagina.click(".request-id", { clickCount: 2 });
             } catch (err) {
-                console.log("Não foi possível clicar no ticket:", err.message);
+                console.log("Não foi possível clicar no ticket: ", err.message);
             }
 
             // Aguardando a tela do ticket abrir
@@ -150,7 +164,7 @@ async function main() {
             // Se a mantenedora não for ABEC
             if (mantenedora !== "ABEC") {
                 // Adiciona o número do ticket e a mantenedora na lista
-                listaTicketsNaoABEC.push({ ticket, mantenedora });
+                listaTicketsNaoABEC.push({ ticket, mantenedora, entrada });
 
                 // Retorna para a página de pesquisa e segue o fluxo
                 await pagina.goto(
@@ -196,6 +210,10 @@ async function main() {
                     if (elementoFormaDePagamento) {
                         const formaDePagamentoSelecionada = elementoFormaDePagamento.querySelector("option[selected]");
                         
+                        if (formaDePagamentoSelecionada.textContent.trim() == "--- SELECIONE ---") {
+                            return "VERIFICAR";
+                        }
+
                         if (formaDePagamentoSelecionada.textContent.trim().toUpperCase() == "DEPÓSITO" || formaDePagamentoSelecionada.textContent.trim().toUpperCase() == "DEPOSITO") {
                             return "CRÉDITO";
                         }
@@ -217,6 +235,18 @@ async function main() {
                 return null;
             });
 
+            // Captura o tipo da nota
+            let tipoNota = await pagina.evaluate(() => {
+                const elementoTipoNota = document.querySelector("#testelancarnotasmb\\.tiponata > div > select");
+                if (elementoTipoNota) {
+                    const tipoNotaSelecionada = elementoTipoNota.querySelector("option[selected]");
+
+                    return tipoNotaSelecionada.textContent.trim().toUpperCase();       
+                }
+                
+                return null;
+            });
+
             // Captura o valor do ticket
             const valorNota = await pagina.evaluate(() => {
                 const elementoValor = document.querySelector(
@@ -235,7 +265,7 @@ async function main() {
                     return "REGULARIZAÇÃO";
                 } else {
                     // REGULARIZAÇÃO
-                    if (!numeroDoPedido || numeroDoPedido == "-" || numeroDoPedido.toUpperCase() == "X" || numeroDoPedido == "o" || numeroDoPedido == "0" || numeroDoPedido.toUpperCase() == "REGULARIZAÇÃO" || numeroDoPedido.toUpperCase() == "REGULARIZACAO" || numeroDoPedido.toUpperCase() == "CRIAR" || numeroDoPedido.toUpperCase() == "NÃO TEM" || numeroDoPedido == "000000" || numeroDoPedido == "1" || numeroDoPedido == "11" || numeroDoPedido == "140" || numeroDoPedido == "134558797" || numeroDoPedido == "134653571" || numeroDoPedido == "134565257") {
+                    if (!numeroDoPedido || numeroDoPedido == "-" || numeroDoPedido.toUpperCase() == "X" || numeroDoPedido == "o" || numeroDoPedido == "0" || numeroDoPedido.toUpperCase() == "REGULARIZAÇÃO" || numeroDoPedido.toUpperCase() == "REGULARIZACAO" || numeroDoPedido.toUpperCase() == "CRIAR" || numeroDoPedido.toUpperCase() == "NÃO TEM" || numeroDoPedido == "000000") {
                         return "REGULARIZAÇÃO";
                     }
                     // OC
@@ -243,9 +273,14 @@ async function main() {
                         return "OC";
                     }
                     // CONTRATO (letras, números, "/" e pode conter "-")
-                    if ((numeroDoPedido.toUpperCase().includes("CONTRATO") || (numeroDoPedido.length >= 13 && numeroDoPedido.length <= 18)) && /[A-Za-z]/.test(numeroDoPedido) && /\d/.test(numeroDoPedido)) {
+                    if ((numeroDoPedido.toUpperCase() == "CONTRATO" || numeroDoPedido.toUpperCase().includes("CONTRATO") || (numeroDoPedido.length >= 13 && numeroDoPedido.length <= 18)) && /[A-Za-z]/.test(numeroDoPedido) && /\d/.test(numeroDoPedido)) {
                         return "CONTRATO";
                     }
+                    //
+                    if (document.querySelector("#testelancarnotasmb\\.centro_custo input") && document.querySelector("#testelancarnotasmb\\.contamb input")) {
+                        return "REGULARIZAÇÃO";
+                    }
+
                     return "VERIFICAR";
                 }
             }, termo, numeroDoPedido);
@@ -289,7 +324,8 @@ async function main() {
                 "larissa.reis@maristabrasil.org",
                 "beatriz.ricardo@maristabrasil.org",
                 "karine.zorek@maristabrasil.org",
-                "jennifer.soares@maristabrasil.org"
+                "jennifer.soares@maristabrasil.org",
+                "paloma.engels@maristabrasil.org"
             ];
 
             if (emailsRH.includes(emailSolicitante)) {
@@ -303,7 +339,7 @@ async function main() {
             ];
 
             if (emailsLeticia.includes(emailSolicitante)) {
-                observacao = "CRIAR REGULARIZAÇÃO COM O CR 35113 E NO LANÇAMENTO PASSAR PARA 35114";
+                observacao = "APROVADORA DO CR 35114 NÃO CONSEGUE APROVAR - PERGUNTAR SE PRECISA DE OUTRO CR";
             }
 
             // Emails atrelados a aprovadora Luana Alvarenga - que não possui acesso ao portal e, por isso, não pode aprovar regularizações
@@ -369,7 +405,7 @@ async function main() {
 
                     if (elementoCentroDeCusto) {
                         if (elementoCentroDeCusto.value?.trim() == "35114" || elementoCentroDeCusto.value?.trim() == 35114) {
-                            return "35113 -> 35114";
+                            return "35114 (PERGUNTAR POR OUTRO CR - APROVADORA NÃO TEM ACESSO)";
                         }
 
                         return elementoCentroDeCusto.value?.trim() || null;
@@ -416,148 +452,6 @@ async function main() {
                     return conta;
                 }, termo, listaContasFinanceiras);
 
-                // Captura o item do ticket
-                const item = (function(contaFinanceira, centroDeCustos) {
-                    centroDeCustos = centroDeCustos.toString();
-
-                    if (contaFinanceira == "860 - PRÊMIOS DE SEGURO A APROPRIAR") {
-                        return 2140038000;
-                    }
-
-                    if (contaFinanceira == "954 - BENFEITORIAS EM ANDAMENTO") {
-                        return 739960;
-                    }
-
-                    if (contaFinanceira == "2030 - ASSISTÊNCIA MÉDICA E ODONTOLÓGICAS") {
-                        return 300805;
-                    }
-
-                    if (contaFinanceira == "2041 - CURSOS E TREINAMENTOS") {
-                        return 351031;
-                    }
-
-                    if (contaFinanceira == "2043 - SERVIÇOS COM RECRUTAMENTO E SELEÇÃO DE PESSOA") {
-                        if (centroDeCustos == "10265" || centroDeCustos == "35113") return 94262;
-                        if (centroDeCustos == "35344") return 33604;
-                    }
-
-                    if (contaFinanceira == "2045 - EVENTOS INTERNOS") {
-                        return 747520;
-                    }
-
-                    if (contaFinanceira == "2068 - ALUGUÉIS E CONDOMÍNIOS") {
-                        return 10061;
-                    }
-
-                    if (contaFinanceira == "2087 - ENERGIA ELÉTRICA") {
-                        if (centroDeCustos == "43000" || centroDeCustos == "43300" || centroDeCustos == "35163") return "139303 | 200042";
-                        if (centroDeCustos == "35164") return 303676;
-                    }
-
-                    if (contaFinanceira == "2088 - FRETES E CARRETOS") {
-                        return 200796;
-                    }
-
-                    if (contaFinanceira == "2091 - MATERIAIS DE ESCRITÓRIO") {
-                        return 1326920;
-                    }
-                    
-                    if (contaFinanceira == "2092 - SERVIÇOS COM DIGITALIZAÇÃO E GESTÃO DE DOCUMENTOS") {
-                        return 747487;
-                    }
-                    
-                    if (contaFinanceira == "2093 - SERVIÇOS COM TELEFONIA FIXA") {
-                        return 207641;
-                    }
-
-                    if (contaFinanceira == "2094 - SERVIÇOS COM TELEFONIA FIXA") {
-                        return 351029;
-                    }
-
-                    if (contaFinanceira == "2095 - SERVIÇOS COM TRANSMISSÃO DE DADOS") {
-                        if (centroDeCustos == "35147" || centroDeCustos == "35153") return 351029;
-                        if (centroDeCustos == "62001" || centroDeCustos == "41000") return 207641;
-                        if (centroDeCustos == "62105" || centroDeCustos == "35142") return 192081;
-                    }
-
-                    if (contaFinanceira == "2119 - SEGUROS") {
-                        return 2140038000;
-                    }
-
-                    if (contaFinanceira == "2130 - SERVIÇOS COM AUDITORIA") {
-                        return 603073;
-                    }
-
-                    if (contaFinanceira == "2131 - SERVIÇOS COM CONSULTORIAS") {
-                        if (centroDeCustos == "35147") return 94262;
-                        if (centroDeCustos == "35123") return 33604;
-                    }
-
-                    if (contaFinanceira == "2134 - SERVIÇOS DE COBRANÇA") {
-                        if (centroDeCustos == "43130") return 358936;
-                        if (centroDeCustos == "35122") return 353199;
-                    }
-
-                    if (contaFinanceira == "2139 - AÇÕES DE CAPTAÇÃO") {
-                        return 358936;
-                    }
-
-                    if (contaFinanceira == "2141 - PUBLICIDADE") {
-                        return 744586;
-                    }
-
-                    if (contaFinanceira == "2159 - HOSPEDAGENS") {
-                        if (centroDeCustos == "35164") return 2140037968;
-                        if (centroDeCustos == "62001" || centroDeCustos == "41000") return 350103;
-                    }
-
-                    if (contaFinanceira == "2162 - OUTROS GASTOS EM VIAGENS") {
-                        return 2140038659;
-                    }
-
-                    if (contaFinanceira == "2163 - PASSAGENS") {
-                        return 2140038659;
-                    }
-
-                    if (contaFinanceira == "2167 - LICENÇA E SERVIÇOS DE MANUTENÇÃO") {
-                        if (centroDeCustos == "35147" || centroDeCustos == "34352" || centroDeCustos == "35123" || centroDeCustos == "35120" || centroDeCustos == "35160") return 33604;
-                        if (centroDeCustos == "35143") return 358936;
-                        if (centroDeCustos == "35122" || centroDeCustos == "10273") return 358384;
-                        if (centroDeCustos == "35119") return 685721;
-                        if (centroDeCustos == "35121") return 746630;
-                        if (centroDeCustos == "10382") return 675339;
-                        if (centroDeCustos == "10367" || centroDeCustos == "35165") return 777846;
-                        if (centroDeCustos == "35112") return 777846;
-                        // if (centroDeCustos == "35147" || centroDeCustos == "10367" || centroDeCustos == "35165" || centroDeCustos == "35120") return 603073;
-                    }
-                    
-                    if (contaFinanceira == "2170 - SERVIÇOS COM IMPRESSÃO") {
-                        return 746323;
-                    }
-
-                    if (contaFinanceira == "2172 - SERVIÇOS DE TI") {
-                        return 358384;
-                    }
-
-                    if (contaFinanceira == "2404 - MULTAS DE TRÂNSITO") {
-                        return 10061;
-                    }
-
-                    if (contaFinanceira == "6347 - AÇÕES DE CAPTAÇÃO - RED.CISÃO" || contaFinanceira == "2031 - AUXÍLIOS DIVERSOS") {
-                        return 94262;
-                    }
-
-                    if (centroDeCustos == "35113 -> 35114" || contaFinanceira == "2136 - COMUNICAÇÃO INTERNA") {
-                        return 741461;
-                    }
-
-                    if (contaFinanceira == "6721 - ACERVO BIBLIOTECÁRIO - DESPESAS") {
-                        return 358185;
-                    }
-
-                    return "";
-                })(contaFinanceira, centroDeCustos);
-
                 // Captura o CNPJ do fornecedor do ticket
                 const cnpj = await pagina.evaluate((termo) => {
                     if (termo == "Terceiros") {
@@ -594,7 +488,6 @@ async function main() {
                     numero: numeroNota,
                     valor: valorNota,
                     vencimento: vencimento,
-                    item: item,
                     descricaoTicket: descricaoTicket,
                     centroDeCustos: centroDeCustos,
                     contaFinanceira: contaFinanceira,
@@ -620,13 +513,22 @@ async function main() {
                 "DESCRIÇÃO": descricaoTicket,
                 UNIDADE: unidade,
                 "SOLICITANTE": emailSolicitante,
+                "TIPO DE NOTA": tipoNota,
                 FILA: fila,
             });
 
             if (contadorTicket < 10) {
-                console.log(`✅ #0${contadorTicket} | ${ticket} | Entrada: ${entrada} | Vencimento: ${vencimento} | ${formaPagamento} | Valor: ${valorNota} | Tipo: ${tipo} | UN: ${unidade} | FILA: ${fila}`);
+                if (fila == "NOTA FISCAL ELETRÔNICA") {
+                    console.log(`✅ #0${contadorTicket} | ${ticket} | Entrada: ${entrada} | Vencimento: ${vencimento} | ${formaPagamento} | Valor: ${valorNota} | Tipo: ${tipo} | UN: ${unidade} | FILA: ELETRÔNICA`);
+                } else {
+                    console.log(`✅ #0${contadorTicket} | ${ticket} | Entrada: ${entrada} | Vencimento: ${vencimento} | ${formaPagamento} | Valor: ${valorNota} | Tipo: ${tipo} | UN: ${unidade} | FILA: TERCEIROS`);
+                }
             } else {
-                console.log(`✅ #${contadorTicket} | ${ticket} | Entrada: ${entrada} | Vencimento: ${vencimento} | ${formaPagamento} | Valor: ${valorNota} | Tipo: ${tipo} | UN: ${unidade} | FILA: ${fila}`);
+                if (fila == "NOTA FISCAL ELETRÔNICA") {
+                    console.log(`✅ #${contadorTicket} | ${ticket} | Entrada: ${entrada} | Vencimento: ${vencimento} | ${formaPagamento} | Valor: ${valorNota} | Tipo: ${tipo} | UN: ${unidade} | FILA: ELETRÔNICA`);
+                } else {
+                    console.log(`✅ #${contadorTicket} | ${ticket} | Entrada: ${entrada} | Vencimento: ${vencimento} | ${formaPagamento} | Valor: ${valorNota} | Tipo: ${tipo} | UN: ${unidade} | FILA: TERCEIROS`);
+                }
             }
 
             contadorTicket++;
@@ -643,10 +545,16 @@ async function main() {
     // Exibe tickets que não são ABEC
     if (listaTicketsNaoABEC.length > 0) {
         listaTicketsNaoABEC.forEach((t) => {
-            console.log(`❌ #${contadorTicket} | Ticket: ${t.ticket} | Mantenedora: ${t.mantenedora}`);
+            if (contadorTicket < 10) {
+                console.log(`❌ #0${contadorTicket} | ${t.ticket} | Entrada: ${t.entrada} | Mantenedora: ${t.mantenedora}`);
+            } else {
+                console.log(`❌ #${contadorTicket} | ${t.ticket} | Entrada: ${t.entrada} | Mantenedora: ${t.mantenedora}`);
+            }
             contadorTicket++;
         });
     }
+
+    const horarioFim = new Date().toLocaleTimeString('pt-BR');
 
     // Acessa a pasta onde os arquivos serão salvos
     const pastaDestino = path.join(__dirname, "dados");
@@ -672,6 +580,7 @@ async function main() {
 
         sheet.addRow([
             "TICKET",
+            "USUÁRIO LANÇ.",
             "ENTRADA",
             "VENCIMENTO",
             "FORMA PAGAMENTO",
@@ -682,6 +591,7 @@ async function main() {
             "DESCRIÇÃO",
             "UNIDADE",
             "SOLICITANTE",
+            "TIPO DE NOTA",
             "FILA"
         ]);
     }
@@ -689,6 +599,7 @@ async function main() {
     // Aplica a largura nas colunas
     sheet.columns = [
         { key: "TICKET", width: 8 },
+        { key: "USUÁRIO LANÇ.", width: 8 },
         { key: "ENTRADA", width: 8 },
         { key: "VENCIMENTO", width: 8 },
         { key: "FORMA_PAGAMENTO", width: 8 },
@@ -699,6 +610,7 @@ async function main() {
         { key: "DESCRICAO", width: 8 },
         { key: "UNIDADE", width: 8 },
         { key: "SOLICITANTE", width: 8 },
+        { key: "TIPO DE NOTA", width: 8 },
         { key: "FILA", width: 8 }
     ];
 
@@ -707,6 +619,7 @@ async function main() {
         listaTicketsExcel.forEach(t => {
             sheet.addRow([
                 t.TICKET,
+                t["USUÁRIO LANÇ."],
                 t.ENTRADA,
                 t.VENCIMENTO,
                 t["FORMA PAGAMENTO"],
@@ -717,6 +630,7 @@ async function main() {
                 t.DESCRIÇÃO,
                 t.UNIDADE,
                 t.SOLICITANTE,
+                t["TIPO DE NOTA"],
                 t.FILA
             ]);
         });
@@ -742,6 +656,7 @@ async function main() {
             },
             columns: [
                 { name: "TICKET" },
+                { name: "USUÁRIO LANÇ." },
                 { name: "ENTRADA" },
                 { name: "VENCIMENTO" },
                 { name: "FORMA PAGAMENTO" },
@@ -752,17 +667,19 @@ async function main() {
                 { name: "DESCRIÇÃO" },
                 { name: "UNIDADE" },
                 { name: "SOLICITANTE" },
+                { name: "TIPO DE NOTA" },
                 { name: "FILA" }
             ],
             rows: linhasValidas
         });
     }
 
-    // Salva o arquivo excel
-    await workbook.xlsx.writeFile(arquivoExcel);
+    if (contadorTicket > 1 && listaTicketsExcel.length > 0) {
+        // Salva o arquivo excel
+        await workbook.xlsx.writeFile(arquivoExcel);
+    }
 
-    // Exibe mensagem com o horário
-    const horario = new Date().toLocaleTimeString('pt-BR');
+    const tempoExecucao = diferencaHoras(horarioInicio, horarioFim);
 
     if (contadorTicket > 1 && listaTicketsExcel.length > 0) {
         // Regularizações TXT
@@ -783,7 +700,6 @@ async function main() {
                 novoConteudoRegularizacoes += `PAGAMENTO SOLICITADOR POR: ${regularizacaoAtual.nome} - ${regularizacaoAtual.email}\n`;
                 novoConteudoRegularizacoes += `TICKET ${regularizacaoAtual.ticket}\n`;
                 novoConteudoRegularizacoes += `NOTA FISCAL NÚMERO ${regularizacaoAtual.numero} | ${regularizacaoAtual.valor} | ${regularizacaoAtual.vencimento}\n`;
-                novoConteudoRegularizacoes += `ITEM ${regularizacaoAtual.item}\n`;
                 novoConteudoRegularizacoes += `DESCRIÇÃO ${regularizacaoAtual.descricaoTicket}\n`;
                 novoConteudoRegularizacoes += `CR ${regularizacaoAtual.centroDeCustos}\n`;
                 novoConteudoRegularizacoes += `CONTA ${regularizacaoAtual.contaFinanceira}\n`;
@@ -816,11 +732,18 @@ async function main() {
             fs.appendFileSync(arquivoTxtTicketsIgnorados, novoConteudoTicketsIgnorados, "utf-8");
         }
 
-        console.log(`\n✅ Todos os dados salvos em ${arquivoExcel} às ${horario}`);
-        exec(`start "" "${arquivoExcel}"`);
+        // Exibe mensagem com o horário
+        const horario = new Date().toLocaleTimeString('pt-BR');
+        console.log(`\n✅ Todos os dados foram salvos às ${horario}.`);
     } else {
         const horario = new Date().toLocaleTimeString('pt-BR');
-        console.log(`\n🎉 Não há nenhum ticket novo. ${horario}`);
+        console.log(`\n🎉 Não há nenhum ticket novo. Finalizado às ${horario}.`);
+    }
+
+    console.log(`🤖 Tempo de execução: ${tempoExecucao}.`);
+    
+    if (contadorTicket > 1 && listaTicketsExcel.length > 0) {
+        exec(`start "" "${arquivoExcel}"`);
     }
 
     await navegador.close();
@@ -857,7 +780,6 @@ async function capturarTickets(pagina, termoPesquisa, ticketsIgnorados) {
         const novosTicketsDaPagina = await pagina.$$("[name=list-item]");
 
         for (let i = 0; i < novosTicketsDaPagina.length; i++) {
-
             const ticketData = await pagina.evaluate((elemento) => {
                 const elementoNumeroTicket = elemento.querySelector(".request-id");
                 const elementoDataDeEntradaTicket = elemento.querySelector(".dataCriacao");
@@ -878,7 +800,7 @@ async function capturarTickets(pagina, termoPesquisa, ticketsIgnorados) {
                 ticketsIgnoradosExecucao.push(ticketData.ticket);
 
                 console.log(
-                `❌ Ticket: ${ticketData.ticket} | Solicitação: ${ticketData.solicitacao}`
+                `❌ ${ticketData.ticket} | Solicitação: ${ticketData.solicitacao}`
                 );
 
                 continue;
@@ -908,7 +830,7 @@ async function capturarTickets(pagina, termoPesquisa, ticketsIgnorados) {
                 timeout: 20000
             });
 
-            await new Promise((r) => setTimeout(r, 4000));
+            await new Promise((r) => setTimeout(r, 5000));
             contadorPagina++;
         } catch (err) {
             console.log("Erro ao avançar página:", err.message);
@@ -918,9 +840,40 @@ async function capturarTickets(pagina, termoPesquisa, ticketsIgnorados) {
 
     const plural = todosTickets.length > 1 ? "tickets" : "ticket";
     const pluralPag = contadorPagina > 1 ? "páginas" : "página";
-    console.log(`✅ Resumo Geral (${termoPesquisa}): ${todosTickets.length} ${plural} em ${contadorPagina} ${pluralPag}`);
+    console.log(`✅ ${termoPesquisa}: ${todosTickets.length} ${plural} em ${contadorPagina} ${pluralPag}`);
 
     return { todosTickets, datasEntradas, ticketsIgnoradosExecucao };
+}
+
+// Função para calcular a diferença entre dois horários no formato HH:mm:ss
+function diferencaHoras(hora1, hora2) {
+    try {
+        // Quebra as strings em partes
+        const [h1, m1, s1] = hora1.split(':').map(Number);
+        const [h2, m2, s2] = hora2.split(':').map(Number);
+
+        // Cria objetos Date no mesmo dia
+        const dataBase = new Date();
+        const date1 = new Date(dataBase.getFullYear(), dataBase.getMonth(), dataBase.getDate(), h1, m1, s1 || 0);
+        const date2 = new Date(dataBase.getFullYear(), dataBase.getMonth(), dataBase.getDate(), h2, m2, s2 || 0);
+
+        // Calcula a diferença em milissegundos
+        let diffMs = date2 - date1;
+
+        // Se negativo, inverte
+        const negativo = diffMs < 0;
+        diffMs = Math.abs(diffMs);
+
+        // Converte para horas, minutos e segundos
+        const horas = Math.floor(diffMs / (1000 * 60 * 60));
+        const minutos = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
+        const segundos = Math.floor((diffMs % (1000 * 60)) / 1000);
+
+        return `${negativo ? '-' : ''}${String(horas).padStart(2, '0')}:${String(minutos).padStart(2, '0')}:${String(segundos).padStart(2, '0')}`;
+    } catch (err) {
+        console.error("Erro ao calcular diferença: ", err);
+        return null;
+    }
 }
 
 // Executando o código
