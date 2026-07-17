@@ -1,5 +1,5 @@
 /*
-    @euisaquevenancio - 23/06/2026
+    @euisaquevenancio - 17/07/2026
     Automação para captura de tickets no Citsmart da mantenedora ABEC, desenvolvido com Node.js.
     
     Instalando todas bibliotecas de uma vez via terminal:
@@ -15,428 +15,489 @@
     node autoTicketsABEC.js
 */
 
-// Bibliotecas
-require("dotenv").config();
-const fs = require("fs"); // Manipulação de arquivos
-const puppeteer = require("puppeteer"); // Acesso ao navegador (Chrome)
-const ExcelJS = require("exceljs"); // Manipulação do Excel com JavaScript
-const path = require("path"); // Uso de caminho de arquivos 
-const { exec } = require("child_process"); // Permite executar comandos do Sistema Operacional
+// Bibliotecas utilizadas
+require("dotenv").config(); // Manipulação de variáveis de ambiente .env
+const fs = require("fs"); // Manipulação de arquivos - File System
+const puppeteer = require("puppeteer"); // Manipulação do navegador - Chrome ou Firefox
+const ExcelJS = require("exceljs"); // Manipulação de arquivos Excel
+const path = require("path"); // Manipulação de caminhos de arquivos
+const { exec } = require("child_process"); // Execução de comandos do sistema operacional - necessário para abrir o arquivo Excel no final do processo
 
-// Login Citsmart
-const usuarioCitsmart = process.env.USUARIO;
-const senhaCitsmart = process.env.SENHA;
+// Capturando os dados de login no Citsmart
+const usuario = process.env.USUARIO;
+const senha = process.env.SENHA;
+
+let contadorTickets = 0;
+let listaTickets = [];
+let listaRegularizacoes = [];
+const listaContasFinanceiras = fs.readFileSync("dados/contasFinanceiras.txt", "utf-8")
+                                 .split("\n")
+                                 .map((contaFinanceira) => contaFinanceira?.trim())
+                                 .filter((contaFinanceira) => contaFinanceira.length > 0);
+// Capturando os tickets que serão ignorados
+const listaTicketsIgnorados = fs.readFileSync("dados/ticketsIgnorados.txt", "utf-8")
+                                .split("\n")
+                                .map((ticketIgnorado) => ticketIgnorado?.trim())
+                                .filter((ticketIgnorado) => ticketIgnorado.length > 0);
 
 async function main() {
-    const horarioInicio = new Date().toLocaleTimeString('pt-BR'); 
-    // Executando o navegador
-    // const navegador = await puppeteer.launch({ headless: false });
+    // Declarando o navegador
     const navegador = await puppeteer.launch({
-        executablePath: 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
-        headless: !true
+        executablePath: "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+        headless: false // Visualizar ou não a automação rodando
     });
-    const pagina = await navegador.newPage();
-    pagina.setDefaultTimeout(30000);
 
-    let listaTicketsIgnorados = fs.readFileSync("dados/ticketsIgnorados.txt", "utf-8");
-    listaTicketsIgnorados.split("\n").map((tI) => tI.trim()).filter((tI) => tI.length > 0);
+    const horarioInicio = new Date().toLocaleTimeString("pt-BR");
+    console.log();
+    
+    const abaNavegador = await navegador.newPage();
+    abaNavegador.setDefaultTimeout(30000);
 
-    // Acessa a página de login do Citsmart
-    await pagina.goto(
+    // Realiza o login no Citsmart
+    const loginSucesso = await loginCitsmart(abaNavegador);
+
+    if (loginSucesso) {
+        await capturarTickets(abaNavegador, "NOTA FISCAL ELETRÔNICA");
+        await capturarTickets(abaNavegador, "NOTA DE TERCEIROS");
+        await organizarLista(listaTickets);
+
+        console.log();
+        for (let i = 0; i < listaTickets.length; i++) {
+            contadorTickets++;
+            await acessarTicket(abaNavegador, listaTickets[i])
+        }
+    }
+    
+    navegador.close();
+    const horarioFim = new Date().toLocaleTimeString("pt-BR");
+    console.log(`\n🤖 Fim da execução do script às ${horarioFim}.`);
+    console.log(`🕓 Tempo de execução: ${calcularDiferencaHoras(horarioInicio, horarioFim)}.\n`);
+
+    await salvarTickets();
+}
+
+// Realiza o login no Citsmart
+async function loginCitsmart(abaNavegador) {
+    await abaNavegador.goto(
         "https://servicos.maristabrasil.org/citsmart/webmvc/login#/ec?idExperienceCenter=3q",
         { waitUntil: "networkidle2" }
     );
-    
+
     // Realiza login no Citsmart
-    await pagina.waitForSelector("#user_login");
-    await pagina.waitForSelector("#password");
-    await pagina.type("#user_login", usuarioCitsmart);
-    await pagina.type("#password", senhaCitsmart);
-    await pagina.keyboard.press("Enter");
-    await pagina.waitForNavigation({ waitUntil: "networkidle2" });
+    if (!(await abaNavegador.$("#user_login") !== null)) {
+        console.log("📢 O campo username não foi encontrado!");
+        return false;
+    }
+
+    if (!(await abaNavegador.$("#password") !== null)) {
+        console.log("📢 O campo password não foi encontrado!");
+        return false;
+    }
+
+    await abaNavegador.type("#user_login", usuario);
+    await abaNavegador.type("#password", senha);
+    await abaNavegador.keyboard.press("Enter");
+
+    await abaNavegador.waitForNavigation({ waitUntil: "networkidle2" });
     await new Promise((r) => setTimeout(r, 2000));
 
-    const listaTicketsExcel = [];
-    const listaTicketsNaoABEC = [];
-    const listaTicketsIgnoradosExecucao = [];
-    const listaRegularizacoes = [];
-    let listaContasFinanceiras = fs.readFileSync("dados/contasFinanceiras.txt", "utf-8").split("\n").map((cF) => cF.trim()).filter((cF) => cF.length > 0);
+    // Verificando se o elemento de mensagem de erro existe, já que a página não retorna nenhum status quando o login da certo ou não
+    if (await abaNavegador.$("div.notification-container div.notification span.message") !== null) {
+        console.log("📢  " + await abaNavegador.$eval(
+            "div.notification-container div.notification span.message",
+            elemento => elemento.textContent
+        ));
+        return false;
+    }
 
-    // Captura tickets das duas pesquisas
-    const listaTicketsPesquisaNotaFiscalEletronica = await capturarTickets(pagina, "NOTA FISCAL ELETRÔNICA", listaTicketsIgnorados);
-    const listaTicketsPesquisaNotaDeTerceiros = await capturarTickets(pagina, "NOTA DE TERCEIROS", listaTicketsIgnorados);
+    // Login realizado com sucesso
+    return true;
+}
 
-    listaTicketsIgnoradosExecucao.push(...listaTicketsPesquisaNotaFiscalEletronica.ticketsIgnoradosExecucao);
-    listaTicketsIgnoradosExecucao.push(...listaTicketsPesquisaNotaDeTerceiros.ticketsIgnoradosExecucao);
-    
-    const pesquisas = [
-        { termo: "Eletrônica", ...listaTicketsPesquisaNotaFiscalEletronica },
-        { termo: "Terceiros", ...listaTicketsPesquisaNotaDeTerceiros },
-    ];
+// Captura as informações básicas do ticket, sem acessar
+async function capturarTickets(abaNavegador, pesquisa) {
+    let contadorTicketsPesquisa = 0;
+    let contadorPagina = 1;
+    let temPaginaSeguinte = true;
 
-    let contadorTicket = 1;
+    await abaNavegador.goto(
+        "https://servicos.maristabrasil.org/citsmart/pages/serviceRequestIncident/serviceRequestIncident.load#/",
+        { waitUntil: "networkidle2" }
+    );
 
-    for (const pesquisa of pesquisas) {
-        const { todosTickets, datasEntradas, termo } = pesquisa;
+    await abaNavegador.reload({ waitUntil: "networkidle2" });
+    await new Promise((r) => setTimeout(r, 4000));
 
-        // Verificando cada um dos tickets
-        for (let i = 0; i < todosTickets.length; i++) {
-            const ticket = todosTickets[i];
-            const entrada = datasEntradas[i];
-            // Caso o ticket não exista ou ele esteja na lista de tickets que devem ser ignorados, pula esse ticket e segue o fluxo
-            if (!ticket || listaTicketsIgnorados.includes(ticket) || ticket == "485540") {
-                if (ticket == "485540") {
-                    if (contadorTicket < 10) {
-                        console.log(`❌ #0${contadorTicket} | ${ticket} | Entrada: ${entrada} | Ignorado`);
-                    } else {
-                        console.log(`❌ #${contadorTicket} | ${ticket} | Entrada: ${entrada} | Ignorado`);
-                    }
-                    contadorTicket++;
-                }
-                continue;
-            }
+    if (!(await abaNavegador.$("#pesquisaSolicitacao") !== null)) {
+        console.log("📢 A barra de pesquisa não foi encontrada!");
+        return false;
+    }
 
-            // Verifica se a barra de pesquisa esta disponível
-            await pagina.waitForFunction(() => {
-                const elementoBarraDePesquisa = document.querySelector("#pesquisaSolicitacao");
-                return elementoBarraDePesquisa && !elementoBarraDePesquisa.disabled;
-            }, { timeout: 20000 });
+    await abaNavegador.focus("#pesquisaSolicitacao");
+    await abaNavegador.click("#pesquisaSolicitacao", { clickCount: 3 });
+    await abaNavegador.keyboard.press("Backspace");
+    await abaNavegador.type("#pesquisaSolicitacao", pesquisa);
+    await abaNavegador.keyboard.press("Enter");
+    await abaNavegador.keyboard.press("Enter");
+    await new Promise((r) => setTimeout(r, 4000));
 
-            // Seleciona a barra e realiza a pesquisa do ticket atual
-            await pagina.focus("#pesquisaSolicitacao");
-            await pagina.click("#pesquisaSolicitacao", { clickCount: 3 });
-            await pagina.keyboard.press("Backspace");
-            await pagina.type("#pesquisaSolicitacao", ticket);
-            await pagina.keyboard.press("Enter");
-            await pagina.keyboard.press("Enter");
-            await new Promise((r) => setTimeout(r, 4000));
+    do {
+        // Captura todos os tickets da página
+        const novosTicketsDaPagina = await abaNavegador.$$("[name=list-item]");
 
-            // Captura a fila que o ticket pertence - NOTA FISCAL ELETRÔNICA ou TERCEIROS
-            const fila = await pagina.evaluate(() => {
-                const elementoFila = document.querySelector("div.tableless-td.ellipsis.solicitacao.ng-binding");
-                if (elementoFila) {
-                    return elementoFila.textContent.trim().toUpperCase();
-                }
+        for (let i = 0; i < novosTicketsDaPagina.length; i++) {
+            // Captura as informações da capa do ticket
+            const informacoesDoTicket = await abaNavegador.evaluate((elemento, pesquisa) => {
+                const elementoNumeroTicket = elemento.querySelector(".request-id");
+                const elementoDataCriacaoTicket = elemento.querySelector(".dataCriacao");
                 
-                return null;
-            });
-
-            // Tentativa de acessar o ticket
-            try {
-                await pagina.waitForSelector(".request-id", { visible: true, timeout: 20000 });
-                await pagina.click(".request-id", { clickCount: 2 });
-            } catch (err) {
-                console.log("Não foi possível clicar no ticket: ", err.message);
-            }
-
-            // Aguardando a tela do ticket abrir
-            await new Promise((r) => setTimeout(r, 4000));
-            // Recarrega a página para tentar evitar falhas
-            await pagina.reload({ waitUntil: "networkidle2" });
-            await new Promise((r) => setTimeout(r, 8000));
-
-            const erro = await pagina.waitForSelector("#div-form-builder > div > span.error", { visible: true, timeout: 2000 }).catch(() => null);
-            if (erro) {
-                await pagina.reload({ waitUntil: "domcontentloaded" });
-                await new Promise((r) => setTimeout(r, 4000));
-            }
-
-            // Captura a mantenedora do ticket
-            const mantenedora = await pagina.evaluate(() => {
-                const seletoresMantenedora = [
-                    "#testelancarnotasmbPage > div:nth-child(2) > div.col-md-2 select",
-                    "#testelancarnotasmb\\.mantenedora > div > select",
-                    "#formulariosGerais\\.Mantenedora > div > select"
-                ];
-
-                let elementoMantenedora = null;
-                for (const seletor of seletoresMantenedora) {
-                    elementoMantenedora = document.querySelector(seletor);
-                    if (elementoMantenedora) {
-                        break;
-                    }
-                }
-
-                const mantenedoraSelecionada = Array.from(elementoMantenedora.querySelectorAll("option[selected]"));
-                return mantenedoraSelecionada[1]?.textContent.trim() || null;
-            });
-
-            // Se a mantenedora não for ABEC
-            if (mantenedora !== "ABEC") {
-                // Adiciona o número do ticket e a mantenedora na lista
-                listaTicketsNaoABEC.push({ ticket, mantenedora, entrada });
-
-                // Retorna para a página de pesquisa e segue o fluxo
-                await pagina.goto(
-                    "https://servicos.maristabrasil.org/citsmart/pages/serviceRequestIncident/serviceRequestIncident.load#/",
-                    { waitUntil: "networkidle2" }
-                );
-                await new Promise((r) => setTimeout(r, 3500));
-                continue;
-            }
-
-            // Captura a data de vencimento do ticket
-            const vencimento = await pagina.evaluate(() => {
-                const seletoresVencimento = [
-                    "#testelancarnotasmb\\.data input",
-                    "input#notasDeTerceiros_MB\\.data_vencimento"
-                ];
-
-                for (const seletor of seletoresVencimento) {
-                    const elementoVencimento = document.querySelector(seletor);
-                    if (!elementoVencimento) {
-                        continue;
-                    }
-
-                    if (elementoVencimento.value?.trim()) {
-                        return elementoVencimento.value?.trim();
-                    } else {
-                        return elementoVencimento.textContent?.trim();
-                    }
-                }
-
-                return null;
-            });
-
-            // Captura a forma de pagamento do ticket
-            let formaPagamento = await pagina.evaluate(() => {
-                const seletoresFormaDePagamento = [
-                    "#testelancarnotasmb\\.vencimentopagamento select",
-                    "#notasDeTerceiros_MB\\.tipo_pagamento > div > select"
-                ];
-
-                for (const seletor of seletoresFormaDePagamento) {
-                    const elementoFormaDePagamento = document.querySelector(seletor);
-                    if (elementoFormaDePagamento) {
-                        const formaDePagamentoSelecionada = elementoFormaDePagamento.querySelector("option[selected]");
-                        
-                        if (formaDePagamentoSelecionada.textContent.trim() == "--- SELECIONE ---") {
-                            return "VERIFICAR";
-                        }
-
-                        if (formaDePagamentoSelecionada.textContent.trim().toUpperCase() == "DEPÓSITO" || formaDePagamentoSelecionada.textContent.trim().toUpperCase() == "DEPOSITO") {
-                            return "CRÉDITO";
-                        }
-                        
-                        return formaDePagamentoSelecionada.textContent.trim().toUpperCase();
-                    }
-                }
-
-                return null; // se nenhum select existir
-            });
-
-            // Captura número do pedido do ticket
-            const numeroDoPedido = await pagina.evaluate(() => {
-                const elementoNumeroDoPedido = document.querySelector("#testelancarnotasmb\\.numeropedido input, #testelancarnotasmb\\.numeropedido2 input, #testelancarnotasmb\\.npedido input");
-
-                if (elementoNumeroDoPedido) {
-                    return elementoNumeroDoPedido.value?.trim();
-                }
-                return null;
-            });
-
-            // Captura o tipo da nota
-            let tipoNota = await pagina.evaluate(() => {
-                const elementoTipoNota = document.querySelector("#testelancarnotasmb\\.tiponata > div > select");
-                if (elementoTipoNota) {
-                    const tipoNotaSelecionada = elementoTipoNota.querySelector("option[selected]");
-
-                    return tipoNotaSelecionada.textContent.trim().toUpperCase();       
-                }
-                
-                return null;
-            });
-
-            // Captura o valor do ticket
-            const valorNota = await pagina.evaluate(() => {
-                const elementoValor = document.querySelector(
-                    "#notasDeTerceiros_MB\\.valor_nota input, #testelancarnotasmb\\.valornotafiscalinicial input"
-                );
-
-                if (elementoValor) {
-                    return elementoValor.value?.trim();
-                }
-                return null;
-            });
-
-            // Captura o tipo do ticket
-            const tipo = await pagina.evaluate((termo, numeroDoPedido) => {
-                if (termo == "Terceiros") {
-                    return "REGULARIZAÇÃO";
+                if (elementoNumeroTicket && elementoDataCriacaoTicket) {
+                    return {
+                        numero: elementoNumeroTicket.textContent?.trim(),
+                        dataCriacao: elementoDataCriacaoTicket.textContent?.trim().split(" ")[0],
+                        fila: pesquisa
+                    };
                 } else {
-                    // REGULARIZAÇÃO
-                    if (!numeroDoPedido || numeroDoPedido == "-" || numeroDoPedido.toUpperCase() == "X" || numeroDoPedido == "o" || numeroDoPedido == "0" || numeroDoPedido.toUpperCase() == "REGULARIZAÇÃO" || numeroDoPedido.toUpperCase() == "REGULARIZACAO" || numeroDoPedido.toUpperCase() == "CRIAR" || numeroDoPedido.toUpperCase() == "NÃO TEM" || numeroDoPedido == "000000") {
-                        return "REGULARIZAÇÃO";
-                    }
-                    // OC
-                    if (/^\d{8}$/.test(numeroDoPedido) || numeroDoPedido.length == 11 || numeroDoPedido.length == 10 || numeroDoPedido.toUpperCase().includes("OC")) {
-                        return "OC";
-                    }
-                    // CONTRATO (letras, números, "/" e pode conter "-")
-                    if ((numeroDoPedido.toUpperCase() == "CONTRATO" || numeroDoPedido.toUpperCase().includes("CONTRATO") || (numeroDoPedido.length >= 13 && numeroDoPedido.length <= 18)) && /[A-Za-z]/.test(numeroDoPedido) && /\d/.test(numeroDoPedido)) {
-                        return "CONTRATO";
-                    }
-                    //
-                    if (document.querySelector("#testelancarnotasmb\\.centro_custo input") && document.querySelector("#testelancarnotasmb\\.contamb input")) {
-                        return "REGULARIZAÇÃO";
-                    }
+                    console.log("📢 As informações da capa do ticket não foram encontrada!");
+                    return null;
+                }
+            }, novosTicketsDaPagina[i], pesquisa);
 
+            if (informacoesDoTicket == null) continue;
+            if (listaTicketsIgnorados.includes(informacoesDoTicket.numero)) continue;
+
+            // Adiciona o ticket na lista
+            listaTickets.push(informacoesDoTicket);
+            contadorTicketsPesquisa++;
+        }
+
+        const buttonAvancarPaginaEstaDesabilitado = await abaNavegador.$eval(
+            "#button-avancar-pesquisa",
+            (elementoButtonAvancarPagina) => elementoButtonAvancarPagina.hasAttribute("disabled")
+        );
+        // Finaliza a busca de tickets se não houver mais tickets em páginas seguintes
+        if (buttonAvancarPaginaEstaDesabilitado) break;
+
+        // Avança para a página seguinte, caso haja mais tickets
+        await abaNavegador.click("#button-avancar-pesquisa");
+
+        try {
+            await abaNavegador.waitForSelector(".request-id", {
+                visible: true,
+                timeout: 20000
+            });
+
+            await new Promise((r) => setTimeout(r, 5000));
+            contadorPagina++;
+        } catch (erro) {
+            console.log("📢 Erro ao tentar avançar para a próxima página de tickets: ", erro.message);
+            break;
+        }
+    } while (temPaginaSeguinte);
+
+    const ticketOuTickets = (contadorTicketsPesquisa > 1) ? "tickets" : "ticket";
+    const paginaOuPaginas = (contadorPagina > 1) ? "páginas" : "página";
+
+    console.log(`✅ Resultado pesquisa "${pesquisa}": ${contadorTicketsPesquisa} ${ticketOuTickets} em ${contadorPagina} ${paginaOuPaginas}.`);
+    return true;
+}
+
+// Organiza os itens da lista em ordem crescente
+async function organizarLista(lista) {
+    lista.sort(function (ticketA, ticketB) {
+        if (ticketA.numero > ticketB.numero) {
+            return 1;
+        }
+        if (ticketA.numero < ticketB.numero) {
+            return -1;
+        }
+        return 0;
+    });
+}
+
+// Acessa o ticket, para capturar as demais informações
+async function acessarTicket(abaNavegador, ticket) {
+    await abaNavegador.goto(
+        "https://servicos.maristabrasil.org/citsmart/pages/serviceRequestIncident/serviceRequestIncident.load#/",
+        { waitUntil: "networkidle2" }
+    );
+
+    await abaNavegador.reload({ waitUntil: "networkidle2" });
+    await new Promise((r) => setTimeout(r, 3000));
+
+    if (!(await abaNavegador.$("#pesquisaSolicitacao") !== null)) {
+        console.log("📢 A barra de pesquisa não foi encontrada!");
+        return;
+    }
+
+    // Pesquisa o ticket
+    await abaNavegador.focus("#pesquisaSolicitacao");
+    await abaNavegador.click("#pesquisaSolicitacao", { clickCount: 3 });
+    await abaNavegador.type("#pesquisaSolicitacao", ticket.numero);
+    await abaNavegador.keyboard.press("Enter");
+    await abaNavegador.keyboard.press("Enter");
+    await new Promise((r) => setTimeout(r, 4000));
+
+    // Acessando o ticket
+    await abaNavegador.waitForSelector(".request-id", { visible: true, timeout: 20000 });
+    await abaNavegador.click(".request-id", { clickCount: 2 });
+    // Aguardando a tela do ticket abrir
+    await new Promise((r) => setTimeout(r, 4000));
+    // Recarrega a página para tentar evitar falhas
+    await abaNavegador.reload({ waitUntil: "networkidle2" });
+    await new Promise((r) => setTimeout(r, 6000));
+
+    const erro = await abaNavegador.waitForSelector("#div-form-builder > div > span.error", { visible: true, timeout: 2000 }).catch(() => null);
+    if (erro) {
+        await abaNavegador.reload({ waitUntil: "domcontentloaded" });
+        await new Promise((r) => setTimeout(r, 4000));
+    }
+
+    // Iniciando a captura de informações do ticket
+    const mantenedora = await abaNavegador.evaluate(() => {
+        const elementoSelectMantenedora = document.querySelector("#testelancarnotasmbPage div:nth-child(2) div.col-md-2 select, #testelancarnotasmb\\.mantenedora div select, #formulariosGerais\\.Mantenedora div select");
+
+        if (elementoSelectMantenedora) {
+            const mantenedoraSelecionada = elementoSelectMantenedora.selectedOptions[0];
+
+            if (mantenedoraSelecionada) {
+                return mantenedoraSelecionada.textContent?.trim();
+            } else {
+                console.log("📢 Mantenedora não declarada!");
+                return "";
+            }
+        }
+    });
+    ticket.mantenedora = mantenedora;
+
+    // Ignorando o ticket, caso não pertença a ABEC ou seja o ticket 485540 (um chamado antigo pendente que não foi fechado)
+    if (mantenedora == "SOME" || ticket.numero == "485540") {
+        console.log(`❌ #${contadorTickets} | ${ticket.numero} | Criado em: ${ticket.dataCriacao} | Mantenedora: ${ticket.mantenedora}`);
+        return;
+    }
+
+    // Nome do solicitante (quem abriu o ticket)
+    const nomeSolicitante = await abaNavegador.evaluate(() => {
+        const elementoNomeSolicitante = document.querySelector(".requester-information-title.ng-binding");
+        if (elementoNomeSolicitante) {
+            return elementoNomeSolicitante.textContent?.trim();
+        }
+        return "";
+    });
+    ticket.nomeSolicitante = nomeSolicitante;
+
+    // E-mail do solicitante
+    const emailSolicitante = await abaNavegador.evaluate(() => {
+        const elementoEmailSolicitante = document.querySelector(".requester-information-value");
+        if (elementoEmailSolicitante) {
+            return elementoEmailSolicitante.textContent?.trim();
+        }
+        return "";
+    });
+    ticket.emailSolicitante = emailSolicitante;
+
+    let observacao = "";
+    // E-mails de solicitantes do RH (prioridade)
+    const emailsRH = ["jaqueline.macedo@maristabrasil.org", "larissa.reis@maristabrasil.org", "beatriz.ricardo@maristabrasil.org", "karine.zorek@maristabrasil.org", "jennifer.soares@maristabrasil.org", "paloma.engels@maristabrasil.org"];
+    if (emailSolicitante != null && emailsRH.includes(emailSolicitante)) {
+        observacao = "RH - PRIORIDADE";
+    }
+
+    // Descrição do ticket
+    const descricao = await abaNavegador.evaluate(() => {
+        const elementoDescricao = document.querySelector("#service-request-view > div > div > div > div.service-request-wrapper > div > div > div.service-request-content.clearfix.s12 > div:nth-child(2) > div.panel.panel-default.service-request-panel-details > div > fieldset > div:nth-child(2) > div > div > div");
+        if (elementoDescricao) {
+            return elementoDescricao.textContent
+                                    .replace(/\s*\n+\s*/g, ' ')
+                                    .replace(/\s+/g, ' ')
+                                    ?.trim();
+        }
+        return "";
+    });
+    ticket.descricao = descricao;
+
+    // Unidade do ticket
+    const unidade = await abaNavegador.evaluate(() => {
+        const elementoUnidade = document.querySelector("#testelancarnotasmb\\.unidade > div > select");
+        
+        if (elementoUnidade) {
+            const unidadeSelecionada = elementoUnidade.selectedOptions[0];
+            if (unidadeSelecionada) {
+                if (unidadeSelecionada.textContent?.trim().substring(0, 2) == "--") {
+                    return "";
+                }
+
+                if (parseInt(unidadeSelecionada.textContent.trim().substring(0, 2)) > 9) {
+                    return unidadeSelecionada.textContent.trim().substring(0, 2);
+                } else {
+                    return unidadeSelecionada.textContent.trim().substring(0, 1);
+                }
+            }
+        }
+        return "";
+    });
+    ticket.unidade = unidade;
+
+    // Número do pedido
+    const numeroPedido = await abaNavegador.evaluate(() => {
+        const elementoNumeroPedido = document.querySelector("#testelancarnotasmb\\.numeropedido input, #testelancarnotasmb\\.numeropedido2 input, #testelancarnotasmb\\.npedido input");
+        if (elementoNumeroPedido) {
+            return elementoNumeroPedido.value?.trim();
+        }
+        return "";
+    });
+    ticket.numeroPedido = numeroPedido;
+
+    // Tipo da nota
+    const tipoNota = await abaNavegador.evaluate(() => {
+        const elementoTipoNota = document.querySelector("#testelancarnotasmb\\.tiponata > div > select");
+        if (elementoTipoNota) {
+            const tipoNotaSelecionado = elementoTipoNota.selectedOptions[0];
+
+            if (tipoNotaSelecionado) {
+                return tipoNotaSelecionado.textContent?.trim();
+            }
+            return "";
+        }
+        return "";
+    });
+    ticket.tipoNota = tipoNota;
+
+    // Valor da nota
+    const valorNota = await abaNavegador.evaluate(() => {
+        const elementoValorNota = document.querySelector("#notasDeTerceiros_MB\\.valor_nota input, #testelancarnotasmb\\.valornotafiscalinicial input");
+        if (elementoValorNota) {
+            return elementoValorNota.value?.trim();
+        }
+        return "";
+    });
+    ticket.valorNota = valorNota;
+
+    // Tipo de lançamento (contrato, OC ou regularização)
+    const tipoLancamento = await abaNavegador.evaluate((ticket) => {
+        if (ticket.fila == "NOTA DE TERCEIROS") {
+            return "REGULARIZAÇÃO";
+        } else {
+            // Regularização
+            if (!ticket.numeroPedido || ticket.numeroPedido == "-" || ticket.numeroPedido.toUpperCase() == "X" || ticket.numeroPedido.toUpperCase() == "O" || ticket.numeroPedido == "0" || ticket.numeroPedido.toUpperCase() == "REGULARIZAÇÃO" || ticket.numeroPedido.toUpperCase() == "REGULARIZACAO" || ticket.numeroPedido.toUpperCase() == "CRIAR" || ticket.numeroPedido.toUpperCase() == "NÃO TEM" || ticket.numeroPedido == "000000") {
+                return "REGULARIZAÇÃO";
+            }
+            // OC
+            if (/^\d{8}$/.test(ticket.numeroPedido) || ticket.numeroPedido.length == 11 || ticket.numeroPedido.length == 10 || ticket.numeroPedido.toUpperCase().includes("OC")) {
+                return "OC";
+            }
+            // Contrato
+            if ((ticket.numeroPedido.toUpperCase() == "CONTRATO" || ticket.numeroPedido.toUpperCase().includes("CONTRATO") || (ticket.numeroPedido.length >= 13 && ticket.numeroPedido.length <= 18)) && /[A-Za-z]/.test(ticket.numeroPedido) && /\d/.test(ticket.numeroPedido)) {
+                return "CONTRATO";
+            } else if (document.querySelector("#testelancarnotasmb\\.centro_custo input") && document.querySelector("#testelancarnotasmb\\.contamb input")) {
+                return "REGULARIZAÇÃO";
+            }
+            return "VERIFICAR";
+        }
+    }, ticket);
+    ticket.tipoLancamento = tipoLancamento;
+
+    // Forma de pagamento
+    const formaPagamento = await abaNavegador.evaluate(() => {
+        const elementoFormaPagamento = document.querySelector("#testelancarnotasmb\\.vencimentopagamento select, #notasDeTerceiros_MB\\.tipo_pagamento > div > select");
+        if (elementoFormaPagamento) {
+            const formaPagamentoSelecionada = elementoFormaPagamento.selectedOptions[0];
+
+            if (formaPagamentoSelecionada) {
+                if (formaPagamentoSelecionada.textContent?.trim() == "--- SELECIONE ---") {
                     return "VERIFICAR";
                 }
-            }, termo, numeroDoPedido);
-
-            let observacao = "";
-            // Captura a situação do ticket
-            const situacao = await pagina.evaluate(() => {
-                const elementoSituacao = document.querySelector(".situacao > span");
-                
-                if (elementoSituacao) {
-                    // Retorna "Fechada" se tiver a classe badge-default
-                    if (elementoSituacao.classList.contains("badge-default")) {
-                        observacao = "Fechada";
-                        return "Fechada";
-                    }
+                if (formaPagamentoSelecionada.textContent?.trim().toUpperCase() == "DEPÓSITO" || formaPagamentoSelecionada.textContent?.trim().toUpperCase() == "DEPOSITO") {
+                    return "CRÉDITO";
                 }
-                return null;                
-            });
-
-            // Captura o e-mail do solicitante do ticket
-            let emailSolicitante = await pagina.evaluate(() => {
-                const elementoEmailSolicitante = document.querySelector(".requester-information-value");
-                if (elementoEmailSolicitante) {
-                    return elementoEmailSolicitante.textContent.trim();
-                }
-                return null;
-            });
-
-            // Captura o nome do solicitante do ticket
-            let nomeSolicitante = await pagina.evaluate(() => {
-                const elementoNomeSolicitante = document.querySelector(".requester-information-title.ng-binding");
-                if (elementoNomeSolicitante) {
-                    return elementoNomeSolicitante.textContent.trim().toUpperCase();
-                }
-                return null;
-            });
-
-            // Emails dos solicitantes do RH
-            const emailsRH = [
-                "jaqueline.macedo@maristabrasil.org",
-                "larissa.reis@maristabrasil.org",
-                "beatriz.ricardo@maristabrasil.org",
-                "karine.zorek@maristabrasil.org",
-                "jennifer.soares@maristabrasil.org",
-                "paloma.engels@maristabrasil.org"
-            ];
-
-            if (emailsRH.includes(emailSolicitante)) {
-                observacao = "RH";
+                return formaPagamentoSelecionada.textContent?.trim().toUpperCase();
             }
+            return "";
+        }
+        return "";
+    });
+    ticket.formaPagamento = formaPagamento;
 
-            // Emails atrelados a aprovadora Leticia Castilhos - que não possui acesso ao portal e, por isso, não pode aprovar regularizações
-            const emailsLeticia = [
-                "caroline.borba@maristabrasil.org",
-                "leticia.castilhos@maristabrasil.org"
-            ];
+    // Data de vencimento
+    const dataVencimento = await abaNavegador.evaluate(() => {
+        const elementoDataVencimento = document.querySelector("#testelancarnotasmb\\.data input, input#notasDeTerceiros_MB\\.data_vencimento");
+        if (elementoDataVencimento) {
+            return elementoDataVencimento.value?.trim();
+        }
+        return "";
+    });
+    ticket.dataVencimento = dataVencimento;
 
-            if (emailsLeticia.includes(emailSolicitante)) {
-                observacao = "APROVADORA DO CR 35114 NÃO CONSEGUE APROVAR - PERGUNTAR SE PRECISA DE OUTRO CR";
-            }
+    // Capturando informações específicas do lançamento de regularizações
+    let cnpjFornecedor = "";
+    let numeroNota = "";
+    if (tipoLancamento == "REGULARIZAÇÃO") {
+        if (ticket.fila == "NOTA DE TERCEIROS") {
+            ticket.centroCustos = "35146 OU 35119";
+            ticket.contaFinanceira = "2141 - PUBLICIDADE";
 
-            // Emails atrelados a aprovadora Luana Alvarenga - que não possui acesso ao portal e, por isso, não pode aprovar regularizações
-            const emailsLuana = [
-                "tatiane.michalovicz@maristabrasil.org",
-                "luana.braga@maristabrasil.org"
-            ];
+            // CNPJ do fornecedor
+            cnpjFornecedor = await abaNavegador.evaluate(() => {
+                const elementoCnpj = document.querySelector("#notasDeTerceiros_MB\\.informe_cnpj");
 
-            if (emailsLuana.includes(emailSolicitante)) {
-                observacao = "CRIAR REGULARIZAÇÃO COM O CR 35113 E NO LANÇAMENTO PASSAR PARA 35344";
-            }
-
-            // Captura a descrição  do ticket
-            let descricaoTicket = await pagina.evaluate(() => {
-                const elementoDescricao = document.querySelector("#service-request-view > div > div > div > div.service-request-wrapper > div > div > div.service-request-content.clearfix.s12 > div:nth-child(2) > div.panel.panel-default.service-request-panel-details > div > fieldset > div:nth-child(2) > div > div > div");
-                if (elementoDescricao) {
-                    return elementoDescricao.textContent
-                            .replace(/\s*\n+\s*/g, ' ')
-                            .replace(/\s+/g, ' ')
-                            .trim();
+                if (elementoCnpj) {
+                    if (elementoCnpj.value?.trim() == "undefined") return "";
+                    return elementoCnpj.value?.trim();
                 }
-                return null;
-            });
-
-            // Captura a unidade do ticket
-            unidade = await pagina.evaluate((termo) => {
-                if (termo === "Terceiros") {
-                    return "53";
-                }
-
-                const elementoUnidade = document.querySelector("#testelancarnotasmb\\.unidade > div > select");
-
-                if (elementoUnidade) {
-                    const unidadeSelecionada = elementoUnidade.selectedOptions[0];
-
-                    if (unidadeSelecionada && unidadeSelecionada.textContent) {
-                        if (unidadeSelecionada.textContent.trim().substring(0, 2) == "--") {
-                            return "";
-                        }
-
-                        if (parseInt(unidadeSelecionada.textContent.trim().substring(0, 2)) > 9) {
-                            return unidadeSelecionada.textContent.trim().substring(0, 2);
-                        } else {
-                            return unidadeSelecionada.textContent.trim().substring(0, 1);
-                        }
-                    }
-                }
-
                 return "";
-            }, termo);
+            });
 
-            // Capturando as informações das regularizações
-            if (tipo == "REGULARIZAÇÃO") {
-                // Captura o centro de custos do ticket
-                const centroDeCustos = await pagina.evaluate((termo) => {
-                    if (termo == "Terceiros") {
-                        return 35119;
+            // Número da nota fiscal
+            numeroNota = await abaNavegador.evaluate(() => {
+                const elementoNumeroNota = document.querySelector("#notasDeTerceiros_MB\\.numero_nota input");
+
+                if (elementoNumeroNota) {
+                    if (elementoNumeroNota.value?.trim() == "undefined") return "";
+                    return elementoNumeroNota.value?.trim();
+                }
+                return "";
+            });
+        } else {
+            // Centro de custos - CR
+            const centroCustos = await abaNavegador.evaluate(() => {
+                const elementoCentroCustos = document.querySelector("#testelancarnotasmb\\.centro_custo input");
+                if (elementoCentroCustos) {
+                    if (elementoCentroCustos.value?.trim() == "35113") {
+                        // CR 35113 - Desiree Silva
+                        observacao = "CR 35113 NÃO CONSEGUE APROVAR - PERGUNTAR SE PRECISA DE OUTRO CR PARA ABRIR A REGULARIZAÇÃO";
+                        return "CR 35113 NÃO CONSEGUE APROVAR - PERGUNTAR SE PRECISA DE OUTRO CR PARA ABRIR A REGULARIZAÇÃO";
+                    } else if (elementoCentroCustos.value?.trim() == "35114") {
+                        // CR 35114 - Letícia Castilhos
+                        observacao = "CR 35114 NÃO CONSEGUE APROVAR - PERGUNTAR SE PRECISA DE OUTRO CR PARA ABRIR A REGULARIZAÇÃO";
+                        return "CR 35114 NÃO CONSEGUE APROVAR - PERGUNTAR SE PRECISA DE OUTRO CR PARA ABRIR A REGULARIZAÇÃO";
+                    } else if (elementoCentroCustos.value?.trim() == "35113") {
+                        // CR 35344 - Luana Alvarenga
+                        observacao = "CR 35344 NÃO CONSEGUE APROVAR - PERGUNTAR SE PRECISA DE OUTRO CR PARA ABRIR A REGULARIZAÇÃO";
+                        return "CR 35344 NÃO CONSEGUE APROVAR - PERGUNTAR SE PRECISA DE OUTRO CR PARA ABRIR A REGULARIZAÇÃO";
                     }
 
-                    const elementoCentroDeCusto = document.querySelector(
-                        "#testelancarnotasmb\\.centro_custo input"
-                    );
+                    return elementoCentroCustos.value?.trim();
+                }
+                return "";
+            });
+            ticket.centroCustos = centroCustos;
 
-                    if (elementoCentroDeCusto) {
-                        if (elementoCentroDeCusto.value?.trim() == "35114" || elementoCentroDeCusto.value?.trim() == 35114) {
-                            return "35114 (PERGUNTAR POR OUTRO CR - APROVADORA NÃO TEM ACESSO)";
-                        }
+            // Conta financeira
+            const contaFinanceira = await abaNavegador.evaluate((ticket, listaContasFinanceiras) => {
+                const elementoContaFinanceira = document.querySelector("#testelancarnotasmb\\.contamb input");
+                if (elementoContaFinanceira) {
+                    let conta = elementoContaFinanceira.value?.trim();
 
-                        return elementoCentroDeCusto.value?.trim() || null;
-                    }
-
-                    return null;
-                }, termo);
-
-                // Captura a conta financeira do ticket
-                const contaFinanceira = await pagina.evaluate((termo, listaContasFinanceiras) => {
-                    if (termo === "Terceiros") {
-                        return "2141 - PUBLICIDADE";
-                    }
-
-                    const elementoContaFinanceira = document.querySelector("#testelancarnotasmb\\.contamb input");
-                    let conta = elementoContaFinanceira.value?.trim().toUpperCase();
-
-                    if (conta === "FORMAÇÃO E DESENVOLVIMENTO") {
+                    if (conta == "FORMAÇÃO E DESENVOLVIMENTO") {
                         return "2041 - CURSOS E TREINAMENTOS";
-                    }
-
-                    if (conta === "EVENTO INTERNO" || conta === "EVENTOS INTERNOS" || conta === "EVENTOS INTERNO") {
+                    } else if (conta == "EVENTO INTERNO" || elementoContaFinanceira.value?.trim() ==  "EVENTOS INTERNOS" || elementoContaFinanceira.value?.trim() == "EVENTOS INTERNO") {
                         return "2045 - EVENTOS INTERNOS";
-                    }
-
-                    if (conta === "01-35111") {
+                    } else if (conta == "01-35111") {
                         return "2030 - ASSISTÊNCIA MÉDICA E ODONTOLÓGICAS";
                     }
 
-                    conta = listaContasFinanceiras.find(c => {
-                        const [numero, descricao] = c.split(" - ");
+                    conta = listaContasFinanceiras.find(contaFinanceira => {
+                        const [numero, descricao] = contaFinanceira.split(" - ");
                         return (
                             conta.includes(numero) ||
                             conta.includes(descricao) ||
@@ -450,113 +511,39 @@ async function main() {
                     }
 
                     return conta;
-                }, termo, listaContasFinanceiras);
-
-                // Captura o CNPJ do fornecedor do ticket
-                const cnpj = await pagina.evaluate((termo) => {
-                    if (termo == "Terceiros") {
-                        const elementoCNPJ = document.querySelector("#notasDeTerceiros_MB\\.informe_cnpj");
-
-                        if (elementoCNPJ) {
-                            return elementoCNPJ.value?.trim() || "";
-                        }
-                    }
-
-                    return "";
-                }, termo);
-
-                // Captura o número da nota do ticket
-                const numeroNota = await pagina.evaluate((termo) => {
-                    if (termo == "Terceiros") {
-                        const elementoNumeroNota = document.querySelector(
-                            "#notasDeTerceiros_MB\\.numero_nota input"
-                        );
-
-                        if (elementoNumeroNota) {
-                            return elementoNumeroNota.value?.trim() || "";
-                        }
-                    }
-
-                    return "";
-                }, termo);
-
-                // Reunindo os dados da regularização do ticket
-                const regularizacao = {
-                    nome: nomeSolicitante,
-                    email: emailSolicitante,
-                    ticket: ticket,
-                    numero: numeroNota,
-                    valor: valorNota,
-                    vencimento: vencimento,
-                    descricaoTicket: descricaoTicket,
-                    centroDeCustos: centroDeCustos,
-                    contaFinanceira: contaFinanceira,
-                    cnpj: cnpj,
-                    unidade: unidade,
-                    formaDePagamento: formaPagamento,
-                };
-
-                // Adicioando a regularização na lista de regularizações
-                listaRegularizacoes.push(regularizacao);
-            }
-
-            // Reunindo as informações do ticket e adicionando-as na lista de tickets que vão para o Excel
-            listaTicketsExcel.push({
-                TICKET: ticket,
-                ENTRADA: entrada,
-                VENCIMENTO: vencimento,
-                "FORMA PAGAMENTO": formaPagamento,
-                VALOR: valorNota,
-                "TIPO": tipo,
-                "OBSERVAÇÃO": observacao,
-                "Nº PEDIDO": numeroDoPedido,
-                "DESCRIÇÃO": descricaoTicket,
-                UNIDADE: unidade,
-                "SOLICITANTE": emailSolicitante,
-                "TIPO DE NOTA": tipoNota,
-                FILA: fila,
-            });
-
-            if (contadorTicket < 10) {
-                if (fila == "NOTA FISCAL ELETRÔNICA") {
-                    console.log(`✅ #0${contadorTicket} | ${ticket} | Entrada: ${entrada} | Vencimento: ${vencimento} | ${formaPagamento} | Valor: ${valorNota} | Tipo: ${tipo} | UN: ${unidade} | FILA: ELETRÔNICA`);
-                } else {
-                    console.log(`✅ #0${contadorTicket} | ${ticket} | Entrada: ${entrada} | Vencimento: ${vencimento} | ${formaPagamento} | Valor: ${valorNota} | Tipo: ${tipo} | UN: ${unidade} | FILA: TERCEIROS`);
                 }
-            } else {
-                if (fila == "NOTA FISCAL ELETRÔNICA") {
-                    console.log(`✅ #${contadorTicket} | ${ticket} | Entrada: ${entrada} | Vencimento: ${vencimento} | ${formaPagamento} | Valor: ${valorNota} | Tipo: ${tipo} | UN: ${unidade} | FILA: ELETRÔNICA`);
-                } else {
-                    console.log(`✅ #${contadorTicket} | ${ticket} | Entrada: ${entrada} | Vencimento: ${vencimento} | ${formaPagamento} | Valor: ${valorNota} | Tipo: ${tipo} | UN: ${unidade} | FILA: TERCEIROS`);
-                }
-            }
-
-            contadorTicket++;
-
-            await pagina.goto(
-                "https://servicos.maristabrasil.org/citsmart/pages/serviceRequestIncident/serviceRequestIncident.load#/",
-                { waitUntil: "networkidle2" }
-            );
-
-            await new Promise((r) => setTimeout(r, 3500));
+                return "";
+            }, ticket, listaContasFinanceiras);
+            ticket.contaFinanceira = contaFinanceira;
         }
+        ticket.observacao = observacao;
+
+        ticket.numeroNota = numeroNota;
+        ticket.cnpjFornecedor = cnpjFornecedor;
+        
+        // Reunindo os dados do ticket para criar a regularização
+        let regularizacao = {
+            nomeSolicitante: ticket.nomeSolicitante,
+            emailSolicitante: ticket.emailSolicitante,
+            ticket: ticket.numero,
+            numeroNota: ticket.numeroNota,
+            cnpjFornecedor: ticket.cnpjFornecedor,
+            valorNota: ticket.valorNota,
+            dataVencimento: ticket.dataVencimento,
+            descricao: ticket.descricao,
+            centroCustos: ticket.centroCustos,
+            contaFinanceira: ticket.contaFinanceira,
+            unidade: ticket.unidade,
+            formaPagamento: ticket.formaPagamento
+        };
+        
+        listaRegularizacoes.push(regularizacao);
     }
+    
+    console.log(`✅ #${contadorTickets} | ${ticket.numero} | Criado em: ${ticket.dataCriacao} | Vencimento: ${ticket.dataVencimento} | Valor: R$ ${ticket.valorNota} | Mantenedora: ${ticket.mantenedora} | UNIDADE: ${ticket.unidade}`);
+}
 
-    // Exibe tickets que não são ABEC
-    if (listaTicketsNaoABEC.length > 0) {
-        listaTicketsNaoABEC.forEach((t) => {
-            if (contadorTicket < 10) {
-                console.log(`❌ #0${contadorTicket} | ${t.ticket} | Entrada: ${t.entrada} | Mantenedora: ${t.mantenedora}`);
-            } else {
-                console.log(`❌ #${contadorTicket} | ${t.ticket} | Entrada: ${t.entrada} | Mantenedora: ${t.mantenedora}`);
-            }
-            contadorTicket++;
-        });
-    }
-
-    const horarioFim = new Date().toLocaleTimeString('pt-BR');
-
-    // Acessa a pasta onde os arquivos serão salvos
+async function salvarTickets() {
     const pastaDestino = path.join(__dirname, "dados");
 
     // Garante que a pasta exista
@@ -564,24 +551,24 @@ async function main() {
         fs.mkdirSync(pastaDestino, { recursive: true });
     }
 
-    // Captura o arquivo excel
+    // Captura o arquivo Excel
     const arquivoExcel = path.join(pastaDestino, "tickets.xlsx");
-    
+
     const workbook = new ExcelJS.Workbook();
     // Se o arquivo existe, lê
     if (fs.existsSync(arquivoExcel)) {
         await workbook.xlsx.readFile(arquivoExcel);
     }
 
-    let sheet = workbook.getWorksheet("Tickets");
-    // Se a planilha não estiver estruturada, adiciona o cabeçalho 
-    if (!sheet) {
-        sheet = workbook.addWorksheet("Tickets");
+    let planilha = workbook.getWorksheet("Tickets");
+    // Se a planilha não estiver estruturada, adiciona o cabeçalho
+    if (!planilha) {
+        planilha = workbook.addWorksheet("Tickets");
 
-        sheet.addRow([
+        planilha.addRow([
             "TICKET",
-            "USUÁRIO LANÇ.",
-            "ENTRADA",
+            "RESPONSÁVEL",
+            "CRIADO EM",
             "VENCIMENTO",
             "FORMA PAGAMENTO",
             "VALOR",
@@ -597,57 +584,61 @@ async function main() {
     }
 
     // Aplica a largura nas colunas
-    sheet.columns = [
+    planilha.columns = [
         { key: "TICKET", width: 8 },
-        { key: "USUÁRIO LANÇ.", width: 8 },
-        { key: "ENTRADA", width: 8 },
+        { key: "RESPONSÁVEL", width: 8 },
+        { key: "CRIADO EM", width: 8 },
         { key: "VENCIMENTO", width: 8 },
-        { key: "FORMA_PAGAMENTO", width: 8 },
+        { key: "FORMA PAGAMENTO", width: 8 },
         { key: "VALOR", width: 8 },
         { key: "TIPO", width: 8 },
-        { key: "OBSERVACAO", width: 8 },
-        { key: "PEDIDO", width: 8 },
-        { key: "DESCRICAO", width: 8 },
+        { key: "OBSERVAÇÃO", width: 8 },
+        { key: "Nº PEDIDO", width: 8 },
+        { key: "DESCRIÇÃO", width: 8 },
         { key: "UNIDADE", width: 8 },
         { key: "SOLICITANTE", width: 8 },
         { key: "TIPO DE NOTA", width: 8 },
         { key: "FILA", width: 8 }
     ];
 
-    // Adicionando os dados (tickets)
-    if (contadorTicket > 1 && listaTicketsExcel.length > 0) {
-        listaTicketsExcel.forEach(t => {
-            sheet.addRow([
-                t.TICKET,
-                t["USUÁRIO LANÇ."],
-                t.ENTRADA,
-                t.VENCIMENTO,
-                t["FORMA PAGAMENTO"],
-                t.VALOR,
-                t.TIPO,
-                t.OBSERVAÇÃO,
-                t["Nº PEDIDO"],
-                t.DESCRIÇÃO,
-                t.UNIDADE,
-                t.SOLICITANTE,
-                t["TIPO DE NOTA"],
-                t.FILA
+    // Adicionando os tickets na planilha
+    if (contadorTickets > 0 && listaTickets.length > 0) {
+        for (let i = 0; i < listaTickets.length; i++) {
+            if (listaTickets[i].mantenedora == "SOME" || listaTickets[i].numero == "485540") {
+                contadorTickets--;
+                continue;
+            }
+
+            planilha.addRow([
+                listaTickets[i].numero,
+                "",
+                listaTickets[i].dataCriacao,
+                listaTickets[i].dataVencimento,
+                listaTickets[i].formaPagamento,
+                listaTickets[i].valorNota,
+                listaTickets[i].tipoLancamento,
+                listaTickets[i].observacao,
+                listaTickets[i].numeroPedido,
+                listaTickets[i].descricao,
+                listaTickets[i].unidade,
+                listaTickets[i].emailSolicitante,
+                listaTickets[i].tipoNota,
+                listaTickets[i].fila
             ]);
-        });
+        }
     }
 
-    if (sheet.rowCount > 1) {
-        // Remove a tabela antiga
-        if (sheet.model.tables) {
-            sheet.model.tables = [];
+    if (planilha.rowCount > 1) {
+        // Remove os tickets da tabela antiga
+        if (planilha.model.tables) {
+            planilha.model.tables = [];
         }
 
-        const linhasValidas = sheet.getSheetValues()
-            .slice(2) // remove header
-            .filter(row => Array.isArray(row)) // Remove undefined
-            .map(row => row.slice(1)); // Remove índice fantasma
-
-        sheet.addTable({
+        const linhasValidas = planilha.getSheetValues().slice(2) // Remove o cabeçalho
+                                                       .filter(linha => Array.isArray(linha)) // Remove undefined
+                                                       .map(linha => linha.slice(1)); // Remove índice fantasma
+        
+        planilha.addTable({
             name: "TabelaTickets",
             ref: "A1",
             headerRow: true,
@@ -656,8 +647,8 @@ async function main() {
             },
             columns: [
                 { name: "TICKET" },
-                { name: "USUÁRIO LANÇ." },
-                { name: "ENTRADA" },
+                { name: "RESPONSÁVEL" },
+                { name: "CRIADO EM" },
                 { name: "VENCIMENTO" },
                 { name: "FORMA PAGAMENTO" },
                 { name: "VALOR" },
@@ -668,189 +659,77 @@ async function main() {
                 { name: "UNIDADE" },
                 { name: "SOLICITANTE" },
                 { name: "TIPO DE NOTA" },
-                { name: "FILA" }
+                { name: "FILA" },
             ],
             rows: linhasValidas
         });
     }
 
-    if (contadorTicket > 1 && listaTicketsExcel.length > 0) {
+    if (contadorTickets > 0 && listaTickets.length > 0) {
         // Salva o arquivo excel
         await workbook.xlsx.writeFile(arquivoExcel);
-    }
 
-    const tempoExecucao = diferencaHoras(horarioInicio, horarioFim);
-
-    if (contadorTicket > 1 && listaTicketsExcel.length > 0) {
-        // Regularizações TXT
-        const arquivoTxtRegularizacoes = path.join(pastaDestino, "regularizacoes.txt");
+        // Arquivo que contém as regularizações
+        const arquivoRegularizacoes = path.join(pastaDestino, "regularizacoes.txt");
 
         let conteudoExistenteRegularizacoes = "";
-        // Se o arquivo já existir, lê o conteúdo
-        if (fs.existsSync(arquivoTxtRegularizacoes)) {
-            conteudoExistenteRegularizacoes = fs.readFileSync(arquivoTxtRegularizacoes, "utf-8");
+        // Se o arquivo existir, lê o conteúdo
+        if (fs.existsSync(arquivoRegularizacoes)) {
+            conteudoExistenteRegularizacoes = fs.readFileSync(arquivoRegularizacoes);
         }
 
         let novoConteudoRegularizacoes = "";
         for (const regularizacaoAtual of listaRegularizacoes) {
-            const ticketStr = `TICKET ${regularizacaoAtual.ticket}`;
-
             // Verifica se o ticket já existe no arquivo
-            if (!conteudoExistenteRegularizacoes.includes(ticketStr)) {
-                novoConteudoRegularizacoes += `PAGAMENTO SOLICITADOR POR: ${regularizacaoAtual.nome} - ${regularizacaoAtual.email}\n`;
-                novoConteudoRegularizacoes += `TICKET ${regularizacaoAtual.ticket}\n`;
-                novoConteudoRegularizacoes += `NOTA FISCAL NÚMERO ${regularizacaoAtual.numero} | ${regularizacaoAtual.valor} | ${regularizacaoAtual.vencimento}\n`;
-                novoConteudoRegularizacoes += `DESCRIÇÃO ${regularizacaoAtual.descricaoTicket}\n`;
-                novoConteudoRegularizacoes += `CR ${regularizacaoAtual.centroDeCustos}\n`;
-                novoConteudoRegularizacoes += `CONTA ${regularizacaoAtual.contaFinanceira}\n`;
-                novoConteudoRegularizacoes += `CNPJ ${regularizacaoAtual.cnpj || ""}\n`;
-                novoConteudoRegularizacoes += `${regularizacaoAtual.unidade} | ${regularizacaoAtual.formaDePagamento}\n\n`;
+            if (!conteudoExistenteRegularizacoes.includes(`TICKET ${regularizacaoAtual.ticket}`)) {
+                novoConteudoRegularizacoes += `PAGAMENTO SOLICITADO POR: ${regularizacaoAtual.nomeSolicitante} - ${regularizacaoAtual.emailSolicitante}\n` +
+                                              `TICKET: ${regularizacaoAtual.ticket}\n` +
+                                              `NÚMERO DA NOTA FISCAL: ${regularizacaoAtual.numeroNota}\n` +
+                                              `VALOR DA NOTA FISCAL: ${regularizacaoAtual.valorNota}\n` +
+                                              `DATA DE VENCIMENTO: ${regularizacaoAtual.dataVencimento}\n` +
+                                              `DESCRIÇÃO: ${regularizacaoAtual.descricao}\n` +
+                                              `CENTRO DE CUSTOS (CR): ${regularizacaoAtual.centroCustos}\n` +
+                                              `CONTA FINANCEIRA: ${regularizacaoAtual.contaFinanceira}\n` +
+                                              `FORNECEDOR: ${regularizacaoAtual.cnpjFornecedor}\n` +
+                                              `UNIDADE: ${regularizacaoAtual.unidade}\n` +
+                                              `FORMA DE PAGAMENTO: ${regularizacaoAtual.formaPagamento}\n\n`;
             }
         }
 
-        // Só escreve se tiver algo novo
-        if (novoConteudoRegularizacoes) {
-            fs.appendFileSync(arquivoTxtRegularizacoes, novoConteudoRegularizacoes, "utf-8");
+        // Só escreve no TXT se tiver conteúdo novo
+        if (novoConteudoRegularizacoes != "") {
+            fs.appendFileSync(arquivoRegularizacoes, novoConteudoRegularizacoes, "utf-8");
         }
 
-        // ticketsIgnorados TXT
-        const arquivoTxtTicketsIgnorados = path.join(pastaDestino, "ticketsIgnorados.txt");
+        // Adicionando os novos tickets que devem ser ignorados (já estão na planilha)
+        const arquivoTicketsIgnorados = path.join(pastaDestino, "ticketsIgnorados.txt");
 
         let conteudoExistenteTicketsIgnorados = "";
-        // Se o arquivo já existir, lê o conteúdo
-        if (fs.existsSync(arquivoTxtTicketsIgnorados)) {
-            conteudoExistenteTicketsIgnorados = fs.readFileSync(arquivoTxtTicketsIgnorados, "utf-8");
+        // Se o arquivo existir, lê o conteúdo
+        if (fs.existsSync(arquivoTicketsIgnorados)) {
+            conteudoExistenteTicketsIgnorados = fs.readFileSync(arquivoTicketsIgnorados, "utf-8");
         }
 
         let novoConteudoTicketsIgnorados = "";
-        for (const ticketAtual of listaTicketsExcel) {
-            novoConteudoTicketsIgnorados += `\n${ticketAtual.TICKET}`;
+        for (const ticketAtual of listaTickets) {
+            novoConteudoTicketsIgnorados += `\n${ticketAtual.numero}`;
         }
 
-        // Só escreve se tiver algo novo
-        if (novoConteudoTicketsIgnorados) {
-            fs.appendFileSync(arquivoTxtTicketsIgnorados, novoConteudoTicketsIgnorados, "utf-8");
+        // Só escreve no TXT se tiver conteúdo novo
+        if (novoConteudoTicketsIgnorados != "") {
+            fs.appendFileSync(arquivoTicketsIgnorados, novoConteudoTicketsIgnorados, "utf-8");
         }
 
-        // Exibe mensagem com o horário
-        const horario = new Date().toLocaleTimeString('pt-BR');
-        console.log(`\n✅ Todos os dados foram salvos às ${horario}.`);
-    } else {
-        const horario = new Date().toLocaleTimeString('pt-BR');
-        console.log(`\n🎉 Não há nenhum ticket novo. Finalizado às ${horario}.`);
-    }
-
-    console.log(`🤖 Tempo de execução: ${tempoExecucao}.`);
-    
-    if (contadorTicket > 1 && listaTicketsExcel.length > 0) {
         exec(`start "" "${arquivoExcel}"`);
     }
-
-    await navegador.close();
-}
-
-// Captura os números dos tickets com base no termo de pesquisa/fila
-async function capturarTickets(pagina, termoPesquisa, ticketsIgnorados) {
-    // Acessa a página para pesquisar os tickets
-    await pagina.goto(
-        "https://servicos.maristabrasil.org/citsmart/pages/serviceRequestIncident/serviceRequestIncident.load#/",
-        { waitUntil: "networkidle2" }
-    );
-
-    await pagina.reload({ waitUntil: "networkidle2" });
-    
-    // Verifica se a barra de pesquisa esta disponível
-    await pagina.waitForSelector("#pesquisaSolicitacao", { timeout: 30000 });
-    await pagina.focus("#pesquisaSolicitacao");
-    await new Promise((r) => setTimeout(r, 1000));
-    // Seleciona a barra e realiza a pesquisa do ticket atual
-    await pagina.click("#pesquisaSolicitacao", { clickCount: 3 });
-    await pagina.keyboard.press("Backspace");
-    await pagina.type("#pesquisaSolicitacao", termoPesquisa);
-    await pagina.keyboard.press("Enter");
-    await pagina.keyboard.press("Enter");
-    await new Promise((r) => setTimeout(r, 7000));
-
-    let todosTickets = [];
-    let datasEntradas = [];
-    let ticketsIgnoradosExecucao = []; // apenas novos tickets ignorados
-    let contadorPagina = 1;
-
-    while (true) {
-        const novosTicketsDaPagina = await pagina.$$("[name=list-item]");
-
-        for (let i = 0; i < novosTicketsDaPagina.length; i++) {
-            const ticketData = await pagina.evaluate((elemento) => {
-                const elementoNumeroTicket = elemento.querySelector(".request-id");
-                const elementoDataDeEntradaTicket = elemento.querySelector(".dataCriacao");
-                const elementoFilaTicket = elemento.querySelector(".solicitacao");
-
-                return {
-                    ticket: elementoNumeroTicket ? elementoNumeroTicket.textContent.trim() : null,
-                    entrada: elementoDataDeEntradaTicket ? elementoDataDeEntradaTicket.textContent.trim().split(" ")[0] : null,
-                    solicitacao: elementoFilaTicket ? elementoFilaTicket.textContent.trim() : null,
-                };
-            }, novosTicketsDaPagina[i]);
-
-            if (!ticketData.ticket) continue;
-
-            // Ignora o ticket se ele não for das filas ABEC
-            if (!["Nota Fiscal Eletrônica", "Nota de Terceiros"].includes(ticketData.solicitacao)) {
-                ticketsIgnorados.push(ticketData.ticket);
-                ticketsIgnoradosExecucao.push(ticketData.ticket);
-
-                console.log(
-                `❌ ${ticketData.ticket} | Solicitação: ${ticketData.solicitacao}`
-                );
-
-                continue;
-            }
-
-            if (ticketsIgnorados.includes(ticketData.ticket)) {
-                ticketsIgnoradosExecucao.push(ticketData.ticket);
-                continue;
-            }
-
-            todosTickets.push(ticketData.ticket);
-            datasEntradas.push(ticketData.entrada);
-        }
-
-        const avancarDisabled = await pagina.$eval(
-            "#button-avancar-pesquisa",
-            (btn) => btn.hasAttribute("disabled")
-        );
-
-        if (avancarDisabled) break;
-
-        await pagina.click("#button-avancar-pesquisa");
-
-        try {
-            await pagina.waitForSelector(".request-id", {
-                visible: true,
-                timeout: 20000
-            });
-
-            await new Promise((r) => setTimeout(r, 5000));
-            contadorPagina++;
-        } catch (err) {
-            console.log("Erro ao avançar página:", err.message);
-            break;
-        }
-    }
-
-    const plural = todosTickets.length > 1 ? "tickets" : "ticket";
-    const pluralPag = contadorPagina > 1 ? "páginas" : "página";
-    console.log(`✅ ${termoPesquisa}: ${todosTickets.length} ${plural} em ${contadorPagina} ${pluralPag}`);
-
-    return { todosTickets, datasEntradas, ticketsIgnoradosExecucao };
 }
 
 // Função para calcular a diferença entre dois horários no formato HH:mm:ss
-function diferencaHoras(hora1, hora2) {
+function calcularDiferencaHoras(horarioInicio, horarioFim) {
     try {
         // Quebra as strings em partes
-        const [h1, m1, s1] = hora1.split(':').map(Number);
-        const [h2, m2, s2] = hora2.split(':').map(Number);
+        const [h1, m1, s1] = horarioInicio.split(":").map(Number);
+        const [h2, m2, s2] = horarioFim.split(":").map(Number);
 
         // Cria objetos Date no mesmo dia
         const dataBase = new Date();
@@ -871,10 +750,12 @@ function diferencaHoras(hora1, hora2) {
 
         return `${negativo ? '-' : ''}${String(horas).padStart(2, '0')}:${String(minutos).padStart(2, '0')}:${String(segundos).padStart(2, '0')}`;
     } catch (err) {
-        console.error("Erro ao calcular diferença: ", err);
+        console.error("Erro ao calcular diferença de horas: ", err);
         return null;
     }
 }
 
 // Executando o código
-main().catch((err) => console.error(err));
+main().catch((err) => {
+    console.error("Erro na execução do script: ", err);
+});
