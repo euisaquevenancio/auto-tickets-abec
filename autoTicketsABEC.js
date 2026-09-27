@@ -48,7 +48,6 @@ async function main() {
     });
 
     const horarioInicio = new Date().toLocaleTimeString("pt-BR");
-    console.log();
     
     const abaNavegador = await navegador.newPage();
     abaNavegador.setDefaultTimeout(30000);
@@ -57,6 +56,7 @@ async function main() {
     const loginSucesso = await loginCitsmart(abaNavegador);
 
     if (loginSucesso) {
+        console.log();
         await capturarTickets(abaNavegador, "NOTA FISCAL ELETRÔNICA");
         await capturarTickets(abaNavegador, "NOTA DE TERCEIROS");
         await organizarLista(listaTickets);
@@ -95,7 +95,14 @@ async function loginCitsmart(abaNavegador) {
     }
 
     await abaNavegador.type("#user_login", usuario);
+    await new Promise((r) => setTimeout(r, 2000));
     await abaNavegador.type("#password", senha);
+
+    await abaNavegador.keyboard.press("Enter");
+    await new Promise((r) => setTimeout(r, 2000));
+
+    await abaNavegador.type("#password", senha);
+
     await abaNavegador.keyboard.press("Enter");
 
     await abaNavegador.waitForNavigation({ waitUntil: "networkidle2" });
@@ -165,6 +172,7 @@ async function capturarTickets(abaNavegador, pesquisa) {
 
             if (informacoesDoTicket == null) continue;
             if (listaTicketsIgnorados.includes(informacoesDoTicket.numero)) continue;
+            if (informacoesDoTicket.numero == 485540 || informacoesDoTicket.numero == 581721 || informacoesDoTicket.numero == 627350 || informacoesDoTicket.numero == 645281 || informacoesDoTicket.numero == 649397) continue;
 
             // Adiciona o ticket na lista
             listaTickets.push(informacoesDoTicket);
@@ -206,10 +214,10 @@ async function capturarTickets(abaNavegador, pesquisa) {
 async function organizarLista(lista) {
     lista.sort(function (ticketA, ticketB) {
         if (ticketA.numero > ticketB.numero) {
-            return 1;
+            return -1;
         }
         if (ticketA.numero < ticketB.numero) {
-            return -1;
+            return 1;
         }
         return 0;
     });
@@ -317,7 +325,11 @@ async function acessarTicket(abaNavegador, ticket) {
     ticket.descricao = descricao;
 
     // Unidade do ticket
-    const unidade = await abaNavegador.evaluate(() => {
+    const unidade = await abaNavegador.evaluate((ticket) => {
+        if (ticket.fila == "NOTA DE TERCEIROS") {
+            return "-";
+        }
+
         const elementoUnidade = document.querySelector("#testelancarnotasmb\\.unidade > div > select");
         
         if (elementoUnidade) {
@@ -335,7 +347,7 @@ async function acessarTicket(abaNavegador, ticket) {
             }
         }
         return "";
-    });
+    }, ticket);
     ticket.unidade = unidade;
 
     // Número do pedido
@@ -349,18 +361,22 @@ async function acessarTicket(abaNavegador, ticket) {
     ticket.numeroPedido = numeroPedido;
 
     // Tipo da nota
-    const tipoNota = await abaNavegador.evaluate(() => {
+    const tipoNota = await abaNavegador.evaluate((ticket) => {
+        if (ticket.fila == "NOTA DE TERCEIROS") {
+            return "-";
+        }
+
         const elementoTipoNota = document.querySelector("#testelancarnotasmb\\.tiponata > div > select");
         if (elementoTipoNota) {
             const tipoNotaSelecionado = elementoTipoNota.selectedOptions[0];
 
             if (tipoNotaSelecionado) {
-                return tipoNotaSelecionado.textContent?.trim();
+                return tipoNotaSelecionado.textContent?.trim().toUpperCase();
             }
             return "";
         }
         return "";
-    });
+    }, ticket);
     ticket.tipoNota = tipoNota;
 
     // Valor da nota
@@ -609,11 +625,14 @@ async function salvarTickets() {
                 continue;
             }
 
+            const dataCriacao = converterParaData(listaTickets[i].dataCriacao);
+            const dataVencimento = converterParaData(listaTickets[i].dataVencimento);
+
             planilha.addRow([
                 listaTickets[i].numero,
                 "",
-                listaTickets[i].dataCriacao,
-                listaTickets[i].dataVencimento,
+                dataCriacao,
+                dataVencimento,
                 listaTickets[i].formaPagamento,
                 listaTickets[i].valorNota,
                 listaTickets[i].tipoLancamento,
@@ -632,6 +651,12 @@ async function salvarTickets() {
         // Remove os tickets da tabela antiga
         if (planilha.model.tables) {
             planilha.model.tables = [];
+        }
+
+        // Formata a coluna VENCIMENTO como dd/mm/aaaa
+        for (let i = 2; i <= planilha.rowCount; i++) {
+            planilha.getCell(i, 3).numFmt = "dd/mm/yyyy";
+            planilha.getCell(i, 4).numFmt = "dd/mm/yyyy";
         }
 
         const linhasValidas = planilha.getSheetValues().slice(2) // Remove o cabeçalho
@@ -753,6 +778,30 @@ function calcularDiferencaHoras(horarioInicio, horarioFim) {
         console.error("Erro ao calcular diferença de horas: ", err);
         return null;
     }
+}
+
+function converterParaData(data) {
+    if (!data) return null;
+
+    // Se já for um objeto Date
+    if (data instanceof Date) {
+        return data;
+    }
+
+    // Se vier como string no formato dd/mm/aaaa
+    if (typeof data === "string") {
+        const partes = data.trim().split("/");
+
+        if (partes.length === 3) {
+            const dia = Number(partes[0]);
+            const mes = Number(partes[1]);
+            const ano = Number(partes[2]);
+
+            return new Date(ano, mes - 1, dia);
+        }
+    }
+
+    return null;
 }
 
 // Executando o código
