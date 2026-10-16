@@ -44,7 +44,8 @@ async function main() {
     // Declarando o navegador
     const navegador = await puppeteer.launch({
         executablePath: "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
-        headless: false // Visualizar ou não a automação rodando
+        headless: false, // Visualizar ou não a automação rodando
+        args: ["--ignore-certificate-errors"] // Ignora se o site é seguro ou não - Por algum motivo, o navegador começou a indicar que o Citsmart não é seguro - negando o acesso. Esse trecho é responsável por "resolver" esse problema
     });
 
     const horarioInicio = new Date().toLocaleTimeString("pt-BR");
@@ -82,7 +83,7 @@ async function loginCitsmart(abaNavegador) {
         "https://servicos.maristabrasil.org/citsmart/webmvc/login#/ec?idExperienceCenter=3q",
         { waitUntil: "networkidle2" }
     );
-
+    
     // Realiza login no Citsmart
     if (!(await abaNavegador.$("#user_login") !== null)) {
         console.log("📢 O campo username não foi encontrado!");
