@@ -36,7 +36,7 @@ Caso as bibliotecas não sejam baixadas, será necessário instalar uma de cada 
 Após a instalação, execute o comando abaixo no terminal para iniciar a automação:
 
 ```bash
-    npm run autoTicketsABEC.js
+    node autoTicketsABEC.js
 ```
 
 ---
