@@ -2,7 +2,9 @@
 
 Automação destinada para a captura de tickets no Citsmart da mantenedora **ABEC**, desenvolvida com Node.js. A coleta é feita diretamente na própria ferramenta, garantindo a extração automatizada das informações necessárias.
 
-O processo inicia com o acesso ao Citsmart e autenticação do usuário, seguido da coleta dos números dos tickets. Registros já processados são desconsiderados com base no arquivo `ticketsIgnorados.txt`. Em seguida, cada ticket é acessado individualmente para a extração de dados como data de vencimento, forma de pagamento e valor. A partir de campos como **Número do pedido**, o sistema identifica se o ticket está vinculado a uma **OC**, **contrato** ou se requer a criação de uma **regularização**. Quando necessário, os dados são organizados no padrão de regularização e registrados no arquivo `regularizações.txt`, utilizando como apoio as informações presentes em `contasFinanceiras.txt`.
+O processo inicia com o acesso ao Citsmart e autenticação do usuário, seguido da coleta dos números dos tickets. Registros já processados são desconsiderados com base no arquivo `ticketsIgnorados.txt`. Em seguida, cada ticket é acessado individualmente para a extração de dados como data de vencimento, forma de pagamento e valor. A partir de campos como **Número do pedido**, o sistema identifica se o ticket está vinculado a uma **OC**, **contrato** ou se requer a criação de uma **regularização**.
+
+Quando necessário, os dados são organizados no padrão de regularização e registrados no arquivo `regularizações.txt`, utilizando como apoio as informações presentes em `contasFinanceiras.txt`.
 
 Por fim, todos os tickets processados são consolidados em uma **planilha**, que é gerada e aberta automaticamente ao final da execução.
 
@@ -20,6 +22,15 @@ Para executar a automação, é necessário instalar todos os arquivos presentes
 
 ```bash
     npm install
+```
+
+Caso as bibliotecas não sejam baixadas, será necessário instalar uma de cada vez executando no terminal:
+
+```bash
+    npm install dotenv
+    npm install axios@1.4.0 cheerio@1.0.0-rc.12
+    npm install puppeteer
+    npm install exceljs
 ```
 
 Após a instalação, execute o comando abaixo no terminal para iniciar a automação:
